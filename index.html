@@ -1,0 +1,1061 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hello Noemi · Trading Journal</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.23.2/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #07070A; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0F0F13; }
+    ::-webkit-scrollbar-thumb { background: #242430; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // localStorage shim — persistent browser storage
+    const storage = {
+      get: async function(key) {
+        try { const v = localStorage.getItem(key); return v ? { value: v } : null; } catch(e) { return null; }
+      },
+      set: async function(key, value) {
+        try { localStorage.setItem(key, value); return { key: key, value: value }; } catch(e) { return null; }
+      },
+      delete: async function(key) {
+        try { localStorage.removeItem(key); return { key: key, deleted: true }; } catch(e) { return null; }
+      }
+    };
+
+
+const C = {
+  bg:"#07070A", panel:"#0F0F13", card:"#16161B", card2:"#1C1C22",
+  border:"#242430", border2:"#2E2E3A", text:"#EAE5DB", sub:"#525A6A",
+  muted:"#1E1E24", dim:"#0C0C10", green:"#1EBF6A", greenBg:"#1EBF6A1A",
+  red:"#E84545", redBg:"#E845451A", gold:"#F5A020", goldBg:"#F5A0201A",
+  blue:"#5A8FE8", purple:"#9878D8",
+};
+const R_DEFAULT  = 250;
+const MONTHS_IT  = ["Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno","Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre"];
+const DAYS_IT    = ["LUN","MAR","MER","GIO","VEN"];
+const DOW_IT     = ["DOM","LUN","MAR","MER","GIO","VEN","SAB"];
+const FASCIA_LIST= [
+  {key:"Gold Zone",    col:"#F5A020"},
+  {key:"Dead Zone",    col:"#4A5060"},
+  {key:"Second Window",col:"#5A8FE8"},
+  {key:"Midday",       col:"#9878D8"},
+  {key:"Power Hour",   col:"#1EBF6A"},
+  {key:"Altro",        col:"#374050"},
+];
+const FASCIA_MAP = {};
+FASCIA_LIST.forEach(function(item){ FASCIA_MAP[item.key] = item.col; });
+
+const SEED = [
+  { id:"s01",date:"2026-05-16",entry_time:"13:45",exit_time:"14:15",duration:30, direction:"Buy", entry_price:7520,  exit_price:7504,   pnl_dollars:-800, result:"Loss",notes:"",partial:false,product:"ES" },
+  { id:"s02",date:"2026-05-15",entry_time:"10:33",exit_time:"11:05",duration:32, direction:"Buy", entry_price:7545,  exit_price:7537.75,pnl_dollars:-362, result:"Loss",notes:"",partial:false,product:"ES" },
+  { id:"s03",date:"2026-05-15",entry_time:"09:40",exit_time:"09:55",duration:15, direction:"Sell",entry_price:7540,  exit_price:7548,   pnl_dollars:-400, result:"Loss",notes:"",partial:false,product:"ES" },
+  { id:"s04",date:"2026-05-14",entry_time:"13:30",exit_time:"13:55",duration:25, direction:"Sell",entry_price:7560,  exit_price:7567.75,pnl_dollars:-388, result:"Loss",notes:"",partial:false,product:"ES" },
+  { id:"s05",date:"2026-05-14",entry_time:"10:15",exit_time:"10:40",duration:25, direction:"Buy", entry_price:7550,  exit_price:7564.25,pnl_dollars:712,  result:"Win", notes:"",partial:false,product:"ES" },
+  { id:"s06",date:"2026-05-14",entry_time:"09:55",exit_time:"10:10",duration:15, direction:"Sell",entry_price:7555,  exit_price:7563.5, pnl_dollars:-425, result:"Loss",notes:"",partial:false,product:"ES" },
+  { id:"s07",date:"2026-05-13",entry_time:"10:15",exit_time:"10:55",duration:40, direction:"Buy", entry_price:7530,  exit_price:7540,   pnl_dollars:500,  result:"Win", notes:"",partial:true, product:"ES" },
+  { id:"s08",date:"2026-05-13",entry_time:"09:34",exit_time:"10:05",duration:31, direction:"Sell",entry_price:7545,  exit_price:7535,   pnl_dollars:500,  result:"Win", notes:"",partial:false,product:"ES" },
+  { id:"s09",date:"2026-05-12",entry_time:"09:55",exit_time:"10:15",duration:20, direction:"Sell",entry_price:7540,  exit_price:7547.5, pnl_dollars:-375, result:"Loss",notes:"",partial:false,product:"ES" },
+  { id:"s10",date:"2026-05-11",entry_time:"10:20",exit_time:"11:00",duration:40, direction:"Sell",entry_price:7535,  exit_price:7526.25,pnl_dollars:438,  result:"Win", notes:"",partial:true, product:"ES" },
+  { id:"s11",date:"2026-05-08",entry_time:"11:15",exit_time:"11:45",duration:30, direction:"Sell",entry_price:7510,  exit_price:7515,   pnl_dollars:-250, result:"Loss",notes:"",partial:false,product:"ES" },
+  { id:"s12",date:"2026-05-08",entry_time:"11:05",exit_time:"11:35",duration:30, direction:"Buy", entry_price:7515,  exit_price:7507.75,pnl_dollars:-362, result:"Loss",notes:"",partial:false,product:"ES" },
+  { id:"s13",date:"2026-05-07",entry_time:"13:20",exit_time:"13:50",duration:30, direction:"Buy", entry_price:7500,  exit_price:7500,   pnl_dollars:0,    result:"BE",  notes:"",partial:false,product:"ES" },
+  { id:"s14",date:"2026-05-07",entry_time:"10:30",exit_time:"11:00",duration:30, direction:"Buy", entry_price:7490,  exit_price:7500.5, pnl_dollars:525,  result:"Win", notes:"",partial:false,product:"ES" },
+  { id:"s15",date:"2026-05-07",entry_time:"09:50",exit_time:"10:05",duration:15, direction:"Sell",entry_price:7495,  exit_price:7503.75,pnl_dollars:-438, result:"Loss",notes:"",partial:false,product:"ES" },
+  { id:"s16",date:"2026-05-06",entry_time:"10:05",exit_time:"10:35",duration:30, direction:"Sell",entry_price:7505,  exit_price:7513.5, pnl_dollars:-425, result:"Loss",notes:"",partial:false,product:"ES" },
+];
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+function getFascia(t) {
+  if (!t) return "Altro";
+  const parts = t.split(":"); const h = Number(parts[0]); const m = Number(parts[1]);
+  const mins = h * 60 + m;
+  if (mins >= 570 && mins <= 630) return "Gold Zone";
+  if (mins > 630  && mins <= 660) return "Dead Zone";
+  if (mins > 660  && mins <= 735) return "Second Window";
+  if (mins > 735  && mins < 900)  return "Midday";
+  if (mins >= 900)                 return "Power Hour";
+  return "Altro";
+}
+function getSession(t) {
+  if (!t) return "AM";
+  const parts = t.split(":"); const h = Number(parts[0]); const m = Number(parts[1]);
+  const mins = h * 60 + m;
+  if (mins < 570) return "Pre Market";
+  if (mins < 720) return "AM";
+  if (mins < 900) return "PM";
+  return "Power Hour";
+}
+function calcR(pnl, rv)  { return pnl / rv; }
+function fmtR(r)         { if (r == null || isNaN(r)) return "\u2014"; return (r >= 0 ? "+" : "") + r.toFixed(2) + "R"; }
+function fmtD(d)         { if (d == null || isNaN(d)) return "\u2014"; return (d >= 0 ? "+" : "-") + "$" + Math.abs(Math.round(d)).toLocaleString("en-US"); }
+function fmtDur(m)       { if (m == null) return "\u2014"; if (m < 60) return Math.round(m) + "m"; return Math.floor(m / 60) + "h " + Math.round(m % 60) + "m"; }
+function getDow(ds)      { if (!ds) return "?"; return DOW_IT[new Date(ds + "T12:00:00").getDay()] || "?"; }
+function dayBg(r) {
+  if (r == null || isNaN(r) || Math.abs(r) < 0.01) return "transparent";
+  const i = Math.min(Math.abs(r) / 4, 1);
+  if (r > 0) return "rgba(30,191,106," + (0.12 + 0.48 * i).toFixed(2) + ")";
+  return "rgba(232,69,69," + (0.12 + 0.48 * i).toFixed(2) + ")";
+}
+function getCalendarWeeks(year, month) {
+  const first = new Date(year, month, 1);
+  const last  = new Date(year, month + 1, 0);
+  const dow   = first.getDay();
+  const back  = dow === 0 ? 6 : dow - 1;
+  const start = new Date(first);
+  start.setDate(start.getDate() - back);
+  const weeks = [];
+  const cur = new Date(start);
+  while (weeks.length < 7) {
+    const week = [];
+    for (let d = 0; d < 5; d++) {
+      const dt = new Date(cur);
+      dt.setDate(dt.getDate() + d);
+      const ds = dt.toISOString().slice(0, 10);
+      week.push({ day: dt.getDate(), dateStr: ds, inMonth: dt.getMonth() === month && dt.getFullYear() === year });
+    }
+    weeks.push(week);
+    cur.setDate(cur.getDate() + 7);
+    if (cur > last && weeks.length >= 1) break;
+  }
+  return weeks.filter(function(w) { return w.some(function(d) { return d.inMonth; }); });
+}
+
+// ─── TRADOVATE PARSER ─────────────────────────────────────────────────────────
+function parseCSVLine(line) {
+  const result = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { inQuotes = !inQuotes; }
+    else if (ch === "," && !inQuotes) { result.push(current.trim()); current = ""; }
+    else { current += ch; }
+  }
+  result.push(current.trim());
+  return result;
+}
+function getNthSunday(year, month, n) {
+  const d = new Date(year, month, 1);
+  const daysToFirstSun = d.getDay() === 0 ? 0 : 7 - d.getDay();
+  return new Date(year, month, 1 + daysToFirstSun + (n - 1) * 7);
+}
+function getLastSunday(year, month) {
+  const lastDay = new Date(year, month + 1, 0);
+  return new Date(year, month, lastDay.getDate() - lastDay.getDay());
+}
+function getETOffset(dateStr) {
+  const p = dateStr.split("/");
+  const date = new Date(parseInt(p[2]), parseInt(p[0]) - 1, parseInt(p[1]));
+  const y = date.getFullYear();
+  const usStart = getNthSunday(y, 2, 2);
+  const usEnd   = getNthSunday(y, 10, 1);
+  const euStart = getLastSunday(y, 2);
+  const euEnd   = getLastSunday(y, 9);
+  const usDst = date >= usStart && date < usEnd;
+  const euDst = date >= euStart && date < euEnd;
+  if (usDst && euDst)    return 6;
+  if (!usDst && !euDst)  return 6;
+  if (usDst && !euDst)   return 5;
+  return 7;
+}
+function itToET(dateStr, timeStr) {
+  const offset = getETOffset(dateStr);
+  const p = dateStr.split("/");
+  const t = timeStr.split(":");
+  const dt = new Date(parseInt(p[2]), parseInt(p[0]) - 1, parseInt(p[1]), parseInt(t[0]), parseInt(t[1]), parseInt(t[2] || 0));
+  dt.setHours(dt.getHours() - offset);
+  return {
+    date: dt.toISOString().slice(0, 10),
+    time: String(dt.getHours()).padStart(2, "0") + ":" + String(dt.getMinutes()).padStart(2, "0"),
+  };
+}
+function parseTradovateCSV(text) {
+  const content = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const lines = content.trim().split("\n").filter(function(l) { return l.trim(); });
+  if (lines.length < 2) return { trades: [], errors: ["File vuoto."] };
+  const header = parseCSVLine(lines[0]);
+  if (header.indexOf("Bought Timestamp") === -1) {
+    return { trades: [], errors: ["Formato non riconosciuto. Usa Position History, NON Orders."] };
+  }
+  const trades = [];
+  const errors = [];
+  const posIdCount = {};
+  // Prima passata: conta quante righe per ogni Position ID (per rilevare partial)
+  for (let i = 1; i < lines.length; i++) {
+    try {
+      const row = parseCSVLine(lines[i]);
+      const posId = row[0] || "";
+      if (posId) posIdCount[posId] = (posIdCount[posId] || 0) + 1;
+    } catch(e) {}
+  }
+  // Seconda passata: parse completo
+  for (let i = 1; i < lines.length; i++) {
+    try {
+      const row = parseCSVLine(lines[i]);
+      const obj = {};
+      for (let j = 0; j < header.length; j++) { obj[header[j]] = row[j] || ""; }
+      const boughtTs = obj["Bought Timestamp"];
+      const soldTs   = obj["Sold Timestamp"];
+      if (!boughtTs || !soldTs) continue;
+      const bParts = boughtTs.split(" "); const bDate = bParts[0]; const bTime = bParts[1];
+      const sParts = soldTs.split(" ");   const sDate = sParts[0]; const sTime = sParts[1];
+      const bp = bDate.split("/"); const bt = bTime.split(":");
+      const sp = sDate.split("/"); const st = sTime.split(":");
+      const bDt = new Date(parseInt(bp[2]), parseInt(bp[0]) - 1, parseInt(bp[1]), parseInt(bt[0]), parseInt(bt[1]), parseInt(bt[2] || 0));
+      const sDt = new Date(parseInt(sp[2]), parseInt(sp[0]) - 1, parseInt(sp[1]), parseInt(st[0]), parseInt(st[1]), parseInt(st[2] || 0));
+      const isBuy = bDt < sDt;
+      const entryDate = isBuy ? bDate : sDate; const entryTime = isBuy ? bTime : sTime;
+      const exitDate  = isBuy ? sDate : bDate; const exitTime  = isBuy ? sTime : bTime;
+      const entryET = itToET(entryDate, entryTime);
+      const exitET  = itToET(exitDate,  exitTime);
+      const buyPrice  = parseFloat(obj["Buy Price"]);
+      const sellPrice = parseFloat(obj["Sell Price"]);
+      const pnl = parseFloat(obj["P/L"].replace(/,/g, ""));
+      const duration = Math.round(Math.abs(sDt - bDt) / 60000);
+      const result = pnl > 0 ? "Win" : pnl < 0 ? "Loss" : "BE";
+      const posId  = obj["Position ID"] || "";
+      const pairId = obj["Pair ID"] || "";
+      const isPartial = posIdCount[posId] > 1;
+      trades.push({
+        id:          (posId && pairId) ? (posId + "_" + pairId) : ("tv_" + Date.now() + "_" + i),
+        date:        entryET.date,
+        entry_time:  entryET.time,
+        exit_time:   exitET.time,
+        duration:    duration,
+        direction:   isBuy ? "Buy" : "Sell",
+        entry_price: isBuy ? buyPrice : sellPrice,
+        exit_price:  isBuy ? sellPrice : buyPrice,
+        pnl_dollars: isNaN(pnl) ? 0 : pnl,
+        result:      result,
+        product:     obj["Product"] || "ES",
+        notes:       "",
+        partial:     isPartial,
+      });
+    } catch(e) { errors.push("Riga " + (i + 1) + ": " + e.message); }
+  }
+  return { trades: trades, errors: errors };
+}
+
+// ─── MAE / MFE ────────────────────────────────────────────────────────────────
+function parseTWCsv(text) {
+  const lines = text.trim().split("\n").filter(function(l) { return l.trim(); });
+  if (lines.length < 2) return [];
+  const result = [];
+  for (let i = 1; i < lines.length; i++) {
+    const p = lines[i].split(",");
+    if (p.length < 4) continue;
+    const time = parseInt(p[0]); const high = parseFloat(p[2]); const low = parseFloat(p[3]);
+    if (!isNaN(time) && !isNaN(high) && !isNaN(low)) result.push({ time: time, high: high, low: low });
+  }
+  return result;
+}
+function unixToETDate(ts) {
+  const etMs = ts * 1000 - 4 * 3600 * 1000;
+  return new Date(etMs).toISOString().slice(0, 10);
+}
+function etToUnix(dateStr, timeStr) {
+  const dp = dateStr.split("-"); const tp = timeStr.split(":");
+  return Math.floor(new Date(Date.UTC(parseInt(dp[0]), parseInt(dp[1]) - 1, parseInt(dp[2]), parseInt(tp[0]) + 4, parseInt(tp[1]), 0)).getTime() / 1000);
+}
+function calcMaeMfe(trade, ohlcData) {
+  if (!trade.entry_price || !trade.exit_price || !trade.entry_time || !trade.exit_time || !ohlcData || !ohlcData.length) return null;
+  const entryUnix = etToUnix(trade.date, trade.entry_time);
+  const exitUnix  = etToUnix(trade.date, trade.exit_time);
+  const candles = ohlcData.filter(function(c) { return c.time >= entryUnix - 300 && c.time <= exitUnix; });
+  if (!candles.length) return null;
+  let maxHigh = -Infinity; let minLow = Infinity;
+  for (let i = 0; i < candles.length; i++) {
+    if (candles[i].high > maxHigh) maxHigh = candles[i].high;
+    if (candles[i].low  < minLow)  minLow  = candles[i].low;
+  }
+  const ep = parseFloat(trade.entry_price); const xp = parseFloat(trade.exit_price);
+  let mae; let mfe; let pnlPts;
+  if (trade.direction === "Buy") { mae = Math.max(0, ep - minLow); mfe = Math.max(0, maxHigh - ep); pnlPts = xp - ep; }
+  else                           { mae = Math.max(0, maxHigh - ep); mfe = Math.max(0, ep - minLow); pnlPts = ep - xp; }
+  const efficiency = mfe > 0.01 ? Math.max(0, Math.min(100, (pnlPts / mfe) * 100)) : 0;
+  return { mae: mae, mfe: mfe, efficiency: efficiency };
+}
+function calcMaeMfeStats(trades, ohlcData) {
+  if (!ohlcData || !ohlcData.length) return null;
+  const results = [];
+  for (let i = 0; i < trades.length; i++) {
+    const t = trades[i];
+    if (t.result !== "Open" && t.entry_price && t.exit_price) {
+      const r = calcMaeMfe(t, ohlcData);
+      if (r) results.push(r);
+    }
+  }
+  if (!results.length) return null;
+  const n = results.length;
+  let sumMae = 0; let sumMfe = 0; let sumEff = 0; let cntEff = 0;
+  for (let i = 0; i < results.length; i++) {
+    sumMae += results[i].mae;
+    sumMfe += results[i].mfe;
+    if (results[i].mfe > 0.01) { sumEff += results[i].efficiency; cntEff++; }
+  }
+  return { avgMae: sumMae / n, avgMfe: sumMfe / n, avgEff: cntEff ? sumEff / cntEff : 0, n: n };
+}
+
+// ─── STATS ENGINE ─────────────────────────────────────────────────────────────
+function calcStats(trades, rv) {
+  const closed = trades.filter(function(t) { return t.result !== "Open"; });
+  if (!closed.length) return null;
+  const wins   = closed.filter(function(t) { return t.result === "Win"; });
+  const losses = closed.filter(function(t) { return t.result === "Loss"; });
+  const bes    = closed.filter(function(t) { return t.result === "BE"; });
+  const wr = wins.length / closed.length;
+  const wR = wins.map(function(t)   { return calcR(t.pnl_dollars, rv); });
+  const lR = losses.map(function(t) { return calcR(t.pnl_dollars, rv); });
+  const avgW = wR.length ? wR.reduce(function(a,b){return a+b;},0) / wR.length : 0;
+  const avgL = lR.length ? lR.reduce(function(a,b){return a+b;},0) / lR.length : 0;
+  const ev   = wr * avgW + (1 - wr) * avgL;
+  const gw   = wR.reduce(function(a,b){return a+b;},0);
+  const gl   = Math.abs(lR.reduce(function(a,b){return a+b;},0));
+  const pf   = gl ? gw / gl : gw > 0 ? 99 : 0;
+  const totalR = closed.reduce(function(s,t){return s+calcR(t.pnl_dollars,rv);},0);
+  const totalD = closed.reduce(function(s,t){return s+(t.pnl_dollars||0);},0);
+  let mxW=0,mxL=0,cW=0,cL=0;
+  closed.forEach(function(t){if(t.result==="Win"){cW++;cL=0;mxW=Math.max(mxW,cW);}else if(t.result==="Loss"){cL++;cW=0;mxL=Math.max(mxL,cL);}else{cW=0;cL=0;}});
+  const rev=[...closed].reverse(); let pk=0,maxDD=0,cum=0;
+  rev.forEach(function(t){cum+=calcR(t.pnl_dollars,rv);if(cum>pk)pk=cum;const dd=pk-cum;if(dd>maxDD)maxDD=dd;});
+  const wDur = wins.filter(function(t){return t.duration!=null;});
+  const lDur = losses.filter(function(t){return t.duration!=null;});
+  return {
+    n:closed.length, w:wins.length, l:losses.length, be:bes.length,
+    wr:wr*100, avgW:avgW, avgL:avgL, ev:ev, pf:pf, totalR:totalR, totalD:totalD,
+    maxConsecW:mxW, maxConsecL:mxL, maxDD:maxDD,
+    rf: maxDD > 0 ? totalR / maxDD : totalR > 0 ? Infinity : 0,
+    avgDurW: wDur.length ? wDur.reduce(function(s,t){return s+t.duration;},0)/wDur.length : null,
+    avgDurL: lDur.length ? lDur.reduce(function(s,t){return s+t.duration;},0)/lDur.length : null,
+  };
+}
+function groupBy(trades, fn, rv) {
+  const g = {};
+  trades.forEach(function(t) { const k = fn(t); if (!g[k]) g[k] = []; g[k].push(t); });
+  const result = {};
+  const keys = Object.keys(g);
+  for (let i = 0; i < keys.length; i++) { result[keys[i]] = calcStats(g[keys[i]], rv); }
+  return result;
+}
+
+// ─── EQUITY CURVE ─────────────────────────────────────────────────────────────
+function EquityCurve({trades, rv}) {
+  const closed = [...trades].filter(function(t){return t.result!=="Open";}).reverse();
+  if (closed.length < 2) return null;
+  const pts = [0]; let cum = 0;
+  closed.forEach(function(t){ cum += calcR(t.pnl_dollars, rv); pts.push(parseFloat(cum.toFixed(2))); });
+  const mn=Math.min(...pts), mx=Math.max(...pts), rng=mx-mn||1;
+  const W=560,H=110,P=22,iW=W-P*2,iH=H-P*2;
+  const x = function(i){ return P+(i/(pts.length-1))*iW; };
+  const y = function(v){ return P+iH-((v-mn)/rng)*iH; };
+  const path = pts.map(function(v,i){ return (i===0?"M":"L")+x(i).toFixed(1)+","+y(v).toFixed(1); }).join(" ");
+  const fill = path+" L"+x(pts.length-1).toFixed(1)+","+(P+iH).toFixed(1)+" L"+P+","+(P+iH).toFixed(1)+" Z";
+  const last=pts[pts.length-1], lc=last>=0?C.green:C.red, showZ=mn<0&&mx>0;
+  let pk2=0,maxDD2=0;
+  pts.forEach(function(v){if(v>pk2)pk2=v;const dd=pk2-v;if(dd>maxDD2)maxDD2=dd;});
+  return (
+    <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"16px 20px",marginBottom:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <span style={{fontSize:10,color:C.sub,letterSpacing:"0.14em",textTransform:"uppercase"}}>{"Equity Curve \u00B7 1R = $"+rv}</span>
+        <div style={{display:"flex",gap:24}}>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontSize:9,color:C.sub,marginBottom:2}}>Total R</div>
+            <div style={{fontSize:16,fontWeight:700,color:lc}}>{fmtR(last)}</div>
+            <div style={{fontSize:11,color:lc,opacity:0.65}}>{fmtD(last*rv)}</div>
+          </div>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontSize:9,color:C.sub,marginBottom:2}}>Max DD</div>
+            <div style={{fontSize:16,fontWeight:700,color:C.red}}>{"-"+maxDD2.toFixed(2)+"R"}</div>
+            <div style={{fontSize:11,color:C.red,opacity:0.65}}>{"$"+Math.round(maxDD2*rv).toLocaleString()}</div>
+          </div>
+        </div>
+      </div>
+      <svg viewBox={"0 0 "+W+" "+H} width="100%" style={{display:"block"}}>
+        <line x1={P} y1={P+iH*0.33} x2={W-P} y2={P+iH*0.33} stroke="#14141A" strokeWidth="1"/>
+        <line x1={P} y1={P+iH*0.67} x2={W-P} y2={P+iH*0.67} stroke="#14141A" strokeWidth="1"/>
+        {showZ && <line x1={P} y1={y(0)} x2={W-P} y2={y(0)} stroke="#2A2A34" strokeWidth="0.75" strokeDasharray="4,3"/>}
+        <path d={fill} fill={lc+"18"}/>
+        <path d={path} fill="none" stroke={lc} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round"/>
+        {pts.map(function(v,i){ return <circle key={i} cx={x(i)} cy={y(v)} r="2" fill={i===0?"#444":v>=(pts[Math.max(0,i-1)]||0)?C.green:C.red}/>; })}
+        <text x={P-4} y={P+4}    fill={C.sub} fontSize="8" textAnchor="end">{mx.toFixed(1)+"R"}</text>
+        <text x={P-4} y={P+iH+4} fill={C.sub} fontSize="8" textAnchor="end">{mn.toFixed(1)+"R"}</text>
+      </svg>
+    </div>
+  );
+}
+
+// ─── METRIC CARD ──────────────────────────────────────────────────────────────
+function MetricCard({label, value, sub, color}) {
+  return (
+    <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:8,padding:"14px 16px"}}>
+      <div style={{fontSize:9,color:C.sub,letterSpacing:"0.13em",textTransform:"uppercase",marginBottom:7}}>{label}</div>
+      <div style={{fontSize:18,fontWeight:700,color:color||C.text,lineHeight:1}}>{value}</div>
+      {sub && <div style={{fontSize:11,color:color||C.sub,opacity:0.65,marginTop:5}}>{sub}</div>}
+    </div>
+  );
+}
+
+// ─── BREAKDOWN ────────────────────────────────────────────────────────────────
+function BRow({label, m, col}) {
+  if (!m) return (
+    <tr style={{borderTop:"0.5px solid "+C.muted}}>
+      <td style={{padding:"8px 8px 8px 0",fontSize:11,color:col||C.sub}}>{label}</td>
+      <td colSpan={4} style={{textAlign:"center",fontSize:10,color:C.muted}}>{"\u2014"}</td>
+    </tr>
+  );
+  return (
+    <tr style={{borderTop:"0.5px solid "+C.muted}}>
+      <td style={{padding:"8px 8px 8px 0",fontSize:11,color:col||C.text,fontWeight:500}}>{label}</td>
+      <td style={{padding:"8px 4px",fontSize:12,fontWeight:700,color:m.ev>=0?C.green:C.red,textAlign:"center"}}>{(m.ev>=0?"+":"")+m.ev.toFixed(2)+"R"}</td>
+      <td style={{padding:"8px 4px",fontSize:11,color:m.wr>=50?C.green:C.red,textAlign:"center"}}>{m.wr.toFixed(0)+"%"}</td>
+      <td style={{padding:"8px 4px",fontSize:11,color:m.pf>=1?C.green:C.red,textAlign:"center"}}>{isFinite(m.pf)?m.pf.toFixed(2):"\u221E"}</td>
+      <td style={{padding:"8px 4px",fontSize:10,color:C.sub,textAlign:"center"}}>{m.n}</td>
+    </tr>
+  );
+}
+function BTable({title, rows}) {
+  return (
+    <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"14px 18px",marginBottom:12}}>
+      <div style={{fontSize:10,color:C.sub,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:10}}>{title}</div>
+      <table style={{width:"100%",borderCollapse:"collapse"}}>
+        <thead>
+          <tr>
+            <th style={{textAlign:"left",paddingBottom:6,fontSize:9,color:C.muted,fontWeight:400,minWidth:80}}>{""}</th>
+            {["EV","WR","PF","N"].map(function(h){ return <th key={h} style={{textAlign:"center",padding:"0 4px 6px",fontSize:9,color:C.muted,fontWeight:400}}>{h}</th>; })}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(function(r,i){ return <BRow key={i} label={r.label} m={r.m} col={r.col}/>; })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ─── DAY CELL ─────────────────────────────────────────────────────────────────
+function DayCell({info, stats, rv, today, showOnlyR}) {
+  const r    = stats ? calcR(stats.totalPnl, rv) : null;
+  const bg   = stats ? dayBg(r) : "transparent";
+  const inM  = info.inMonth;
+  const isToday = info.dateStr === today;
+  const textC = !inM ? C.muted : r == null ? C.sub : r > 0 ? C.green : r < 0 ? C.red : C.sub;
+  return (
+    <div style={{background:inM?(bg||C.card):C.dim,border:"1px solid "+(isToday?C.gold+"70":C.border),borderRadius:6,padding:"8px 10px",minHeight:72,opacity:inM?1:0.3}}>
+      <div style={{fontSize:11,color:isToday?C.gold:C.sub,fontWeight:isToday?700:400,marginBottom:5}}>{info.day}</div>
+      {stats && inM && (
+        <div>
+          <div style={{fontSize:14,fontWeight:700,color:textC,lineHeight:1,marginBottom:3}}>{fmtR(r)}</div>
+          {!showOnlyR && <div style={{fontSize:10,color:textC,opacity:0.7,marginBottom:3}}>{fmtD(stats.totalPnl)}</div>}
+          <div style={{fontSize:9,color:C.sub}}>{stats.n+"t \u00B7 "+stats.wr.toFixed(0)+"%W"}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── WEEK CELL ────────────────────────────────────────────────────────────────
+function WeekCell({weekTrades, rv, showOnlyR}) {
+  if (!weekTrades || !weekTrades.length) return (
+    <div style={{background:C.dim,border:"1px solid "+C.border,borderRadius:6,padding:"8px 10px",minHeight:72,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <span style={{fontSize:9,color:C.muted}}>{"\u2014"}</span>
+    </div>
+  );
+  const closed   = weekTrades.filter(function(t){ return t.result !== "Open"; });
+  const totalPnl = closed.reduce(function(s,t){ return s+(t.pnl_dollars||0); }, 0);
+  const r   = calcR(totalPnl, rv);
+  const wins = closed.filter(function(t){ return t.result === "Win"; }).length;
+  const wr  = closed.length ? wins / closed.length * 100 : 0;
+  const col = r > 0 ? C.green : r < 0 ? C.red : C.sub;
+  return (
+    <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:6,padding:"8px 10px",minHeight:72}}>
+      <div style={{fontSize:9,color:C.sub,marginBottom:5,letterSpacing:"0.08em"}}>TOT</div>
+      <div style={{fontSize:13,fontWeight:700,color:col,lineHeight:1,marginBottom:2}}>{fmtR(r)}</div>
+      {!showOnlyR && <div style={{fontSize:10,color:col,opacity:0.7,marginBottom:2}}>{fmtD(totalPnl)}</div>}
+      <div style={{fontSize:9,color:C.sub}}>{closed.length+"t \u00B7 "+wr.toFixed(0)+"%W"}</div>
+    </div>
+  );
+}
+
+// ─── CALENDARIO VIEW ──────────────────────────────────────────────────────────
+function CalendarioView({trades, rv, onImport, onExport, onTWImport, ohlcMeta, showOnlyR, onToggleR}) {
+  const now = new Date();
+  const [year,  setYear]  = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth());
+  const today = now.toISOString().slice(0, 10);
+  const byDate = {};
+  trades.forEach(function(t){ if (!byDate[t.date]) byDate[t.date]=[]; byDate[t.date].push(t); });
+  function dayStats(ds) {
+    const dt = byDate[ds]; if (!dt || !dt.length) return null;
+    const closed = dt.filter(function(t){ return t.result !== "Open"; }); if (!closed.length) return null;
+    const totalPnl = closed.reduce(function(s,t){ return s+(t.pnl_dollars||0); }, 0);
+    const wins = closed.filter(function(t){ return t.result === "Win"; }).length;
+    return { n: closed.length, totalPnl: totalPnl, wr: wins / closed.length * 100 };
+  }
+  const weeks = getCalendarWeeks(year, month);
+  const monthTrades = trades.filter(function(t){
+    const p = t.date.split("-").map(Number); return p[0]===year && p[1]-1===month;
+  });
+  const ms = calcStats(monthTrades, rv);
+  function prevM(){ if (month===0){setYear(function(y){return y-1;}); setMonth(11);} else setMonth(function(m){return m-1;}); }
+  function nextM(){ if (month===11){setYear(function(y){return y+1;}); setMonth(0);} else setMonth(function(m){return m+1;}); }
+  const monthSummary = [
+    {label:"WIN RATE", val:ms?ms.wr.toFixed(0)+"%":"", col:ms?(ms.wr>=50?C.green:C.red):C.sub},
+    {label:"TRADE",    val:ms?String(ms.n):"",          col:C.text},
+    {label:"W/L/BE",   val:ms?(ms.w+" / "+ms.l+" / "+ms.be):"", col:C.sub},
+  ];
+  return (
+    <div>
+      <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"18px 20px",marginBottom:14}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:ms?16:0}}>
+          <div style={{display:"flex",alignItems:"center",gap:14}}>
+            <button onClick={prevM} style={{background:"transparent",border:"1px solid "+C.border,borderRadius:4,color:C.sub,fontSize:15,padding:"4px 12px",cursor:"pointer",fontFamily:"inherit"}}>{"\u2039"}</button>
+            <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:24,fontWeight:700,color:C.text,letterSpacing:"0.08em"}}>{MONTHS_IT[month].toUpperCase()+" "+year}</span>
+            <button onClick={nextM} style={{background:"transparent",border:"1px solid "+C.border,borderRadius:4,color:C.sub,fontSize:15,padding:"4px 12px",cursor:"pointer",fontFamily:"inherit"}}>{"\u203A"}</button>
+          </div>
+          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+            <button onClick={onToggleR} style={{padding:"6px 12px",background:showOnlyR?C.gold+"20":"transparent",border:"1px solid "+(showOnlyR?C.gold:C.border),borderRadius:20,color:showOnlyR?C.gold:C.sub,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.1em",fontWeight:showOnlyR?700:400}}>
+              {showOnlyR?"R":"R \u00B7 $"}
+            </button>
+            {ohlcMeta && <span style={{fontSize:10,color:C.green,border:"1px solid "+C.green+"30",borderRadius:4,padding:"3px 8px"}}>{"OHLC "+ohlcMeta.days+"gg"}</span>}
+            <button onClick={onTWImport} style={{padding:"7px 14px",background:"transparent",border:"1px solid "+C.blue+"50",borderRadius:4,color:C.blue,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.1em",textTransform:"uppercase"}}>{"TW \u2191"}</button>
+            <button onClick={onImport}   style={{padding:"7px 14px",background:"transparent",border:"1px solid "+C.border,borderRadius:4,color:C.sub,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.1em",textTransform:"uppercase"}}>{"IMPORT \u2191"}</button>
+            <button onClick={onExport}   style={{padding:"7px 14px",background:"transparent",border:"1px solid "+C.gold+"50",borderRadius:4,color:C.gold,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.1em",textTransform:"uppercase"}}>{"EXPORT \u2193"}</button>
+          </div>
+        </div>
+        {ms && (
+          <div style={{display:"flex",gap:24,paddingTop:12,borderTop:"0.5px solid "+C.muted}}>
+            <div>
+              <div style={{fontSize:9,color:C.sub,marginBottom:2,letterSpacing:"0.1em"}}>MESE</div>
+              <div style={{fontSize:18,fontWeight:700,color:ms.totalR>=0?C.green:C.red}}>{fmtR(ms.totalR)}</div>
+              {!showOnlyR && <div style={{fontSize:11,color:ms.totalR>=0?C.green:C.red,opacity:0.65}}>{fmtD(ms.totalD)}</div>}
+            </div>
+            {monthSummary.map(function(item){ return (
+              <div key={item.label} style={{borderLeft:"0.5px solid "+C.muted,paddingLeft:24}}>
+                <div style={{fontSize:9,color:C.sub,marginBottom:2,letterSpacing:"0.1em"}}>{item.label}</div>
+                <div style={{fontSize:16,fontWeight:600,color:item.col}}>{item.val}</div>
+              </div>
+            ); })}
+          </div>
+        )}
+      </div>
+      <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"16px"}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr) 80px",gap:6,marginBottom:8}}>
+          {DAYS_IT.map(function(d){ return <div key={d} style={{textAlign:"center",fontSize:10,color:C.sub,letterSpacing:"0.1em",padding:"3px 0"}}>{d}</div>; })}
+          <div style={{textAlign:"center",fontSize:9,color:C.muted,letterSpacing:"0.08em",padding:"3px 0"}}>WEEK</div>
+        </div>
+        {weeks.map(function(week, wi){
+          const wkTrades = [];
+          for (let d = 0; d < week.length; d++) {
+            if (week[d].inMonth) {
+              const dt = byDate[week[d].dateStr];
+              if (dt) for (let j = 0; j < dt.length; j++) wkTrades.push(dt[j]);
+            }
+          }
+          return (
+            <div key={wi} style={{display:"grid",gridTemplateColumns:"repeat(5,1fr) 80px",gap:6,marginBottom:6}}>
+              {week.map(function(info, di){ return <DayCell key={di} info={info} stats={dayStats(info.dateStr)} rv={rv} today={today} showOnlyR={showOnlyR}/>; })}
+              <WeekCell weekTrades={wkTrades} rv={rv} showOnlyR={showOnlyR}/>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── DASHBOARD ────────────────────────────────────────────────────────────────
+function Dashboard({trades, rv, ohlcData}) {
+  const m = calcStats(trades, rv);
+  const mmStats = calcMaeMfeStats(trades, ohlcData);
+  if (!m) return <div style={{textAlign:"center",padding:"60px 20px",color:C.sub,fontSize:13}}>Nessun trade. Importa il primo CSV dal tab Calendario.</div>;
+  const byFascia = groupBy(trades, function(t){ return getFascia(t.entry_time||""); }, rv);
+  const byDow    = groupBy(trades, function(t){ return getDow(t.date); }, rv);
+  const bySess   = groupBy(trades, function(t){ return getSession(t.entry_time||""); }, rv);
+  const byDir    = groupBy(trades, function(t){ return t.direction||"Buy"; }, rv);
+  const byPart   = groupBy(trades, function(t){ return t.partial?"Partial":"Full Hold"; }, rv);
+  const rfC  = m.rf>=3?C.green:m.rf>=1.5?C.gold:C.red;
+  const evC  = m.ev>=0?C.green:C.red;
+  const totC = m.totalR>=0?C.green:C.red;
+  const effC = mmStats ? (mmStats.avgEff>=50?C.green:mmStats.avgEff>=30?C.gold:C.red) : C.sub;
+  return (
+    <div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:10}}>
+        <MetricCard label="Expectancy"    value={(m.ev>=0?"+":"")+m.ev.toFixed(2)+"R"}  sub={fmtD(m.ev*rv)}   color={evC}/>
+        <MetricCard label="Win Rate"      value={m.wr.toFixed(1)+"%"}                                          color={m.wr>=50?C.green:C.red}/>
+        <MetricCard label="Profit Factor" value={isFinite(m.pf)?m.pf.toFixed(2):"\u221E"}                    color={m.pf>=1?C.green:C.red}/>
+        <MetricCard label="Total R"       value={fmtR(m.totalR)}                         sub={fmtD(m.totalD)}  color={totC}/>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:10}}>
+        <MetricCard label="Avg Win"           value={"+"+m.avgW.toFixed(2)+"R"} sub={fmtD(m.avgW*rv)} color={C.green}/>
+        <MetricCard label="Avg Loss"          value={m.avgL.toFixed(2)+"R"}     sub={fmtD(m.avgL*rv)} color={C.red}/>
+        <MetricCard label="Avg Duration Win"  value={fmtDur(m.avgDurW)}                               color={C.green}/>
+        <MetricCard label="Avg Duration Loss" value={fmtDur(m.avgDurL)}                               color={C.red}/>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:14}}>
+        <MetricCard label="Recovery Factor" value={isFinite(m.rf)?m.rf.toFixed(2):"\u221E"} sub="total R / max DD" color={rfC}/>
+        <MetricCard label="Max Streak Win"  value={String(m.maxConsecW)} sub="consecutivi" color={C.green}/>
+        <MetricCard label="Max Streak Loss" value={String(m.maxConsecL)} sub="consecutivi" color={C.red}/>
+        <MetricCard label="W / L / BE"      value={m.w+" / "+m.l+" / "+m.be} color={C.sub}/>
+      </div>
+      <EquityCurve trades={trades} rv={rv}/>
+      {mmStats ? (
+        <div style={{background:C.card,border:"1px solid "+C.blue+"40",borderRadius:10,padding:"16px 20px",marginBottom:14}}>
+          <div style={{fontSize:10,color:C.blue,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:12}}>{"MAE / MFE \u00B7 "+mmStats.n+" trade con OHLC \u00B7 M5"}</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
+            <div style={{background:C.panel,borderRadius:8,padding:"14px 16px",border:"1px solid "+C.red+"30"}}>
+              <div style={{fontSize:9,color:C.sub,letterSpacing:"0.13em",textTransform:"uppercase",marginBottom:7}}>Avg MAE</div>
+              <div style={{fontSize:22,fontWeight:700,color:C.red,lineHeight:1}}>{mmStats.avgMae.toFixed(2)+" pt"}</div>
+              <div style={{fontSize:10,color:C.red,opacity:0.65,marginTop:4}}>max contro</div>
+            </div>
+            <div style={{background:C.panel,borderRadius:8,padding:"14px 16px",border:"1px solid "+C.green+"30"}}>
+              <div style={{fontSize:9,color:C.sub,letterSpacing:"0.13em",textTransform:"uppercase",marginBottom:7}}>Avg MFE</div>
+              <div style={{fontSize:22,fontWeight:700,color:C.green,lineHeight:1}}>{mmStats.avgMfe.toFixed(2)+" pt"}</div>
+              <div style={{fontSize:10,color:C.green,opacity:0.65,marginTop:4}}>max a favore</div>
+            </div>
+            <div style={{background:C.panel,borderRadius:8,padding:"14px 16px",border:"1px solid "+effC+"30"}}>
+              <div style={{fontSize:9,color:C.sub,letterSpacing:"0.13em",textTransform:"uppercase",marginBottom:7}}>Exit Efficiency</div>
+              <div style={{fontSize:22,fontWeight:700,color:effC,lineHeight:1}}>{mmStats.avgEff.toFixed(1)+"%"}</div>
+              <div style={{fontSize:10,color:C.sub,opacity:0.65,marginTop:4}}>catturato / disponibile</div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:10,padding:"14px 20px",marginBottom:14,display:"flex",alignItems:"center",gap:16}}>
+          <div style={{fontSize:10,color:C.muted}}>MAE / MFE</div>
+          <div style={{fontSize:12,color:C.muted}}>Importa CSV TradingView dal Calendario</div>
+        </div>
+      )}
+      <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"16px 20px",marginBottom:12}}>
+        <div style={{fontSize:10,color:C.sub,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:14}}>Expectancy per fascia oraria</div>
+        {FASCIA_LIST.map(function(item){
+          const fm = byFascia[item.key]; if (!fm) return null;
+          const pct = Math.min(Math.max(fm.ev*20+50,2),98);
+          return (
+            <div key={item.key} style={{marginBottom:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                <span style={{fontSize:11,color:item.col,fontWeight:500}}>{item.key}</span>
+                <span style={{fontSize:11,color:fm.ev>=0?C.green:C.red}}>{"EV "+(fm.ev>=0?"+":"")+fm.ev.toFixed(2)+"R \u00B7 WR "+fm.wr.toFixed(0)+"% \u00B7 "+fm.n+"t"}</span>
+              </div>
+              <div style={{height:3,background:C.muted,borderRadius:2}}>
+                <div style={{width:pct+"%",height:"100%",background:item.col,borderRadius:2}}/>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <BTable title="Performance per giorno della settimana" rows={DAYS_IT.map(function(d){ return {label:d,m:byDow[d]||null,col:"#7A8FA8"}; })}/>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <BTable title="Performance per session" rows={[
+          {label:"Pre Market",m:bySess["Pre Market"]||null,col:C.sub},
+          {label:"AM",        m:bySess["AM"]        ||null,col:C.gold},
+          {label:"PM",        m:bySess["PM"]        ||null,col:C.blue},
+          {label:"Power Hour",m:bySess["Power Hour"]||null,col:C.green},
+        ]}/>
+        <BTable title="Buy vs Sell" rows={[
+          {label:"Buy", m:byDir["Buy"] ||null,col:C.green},
+          {label:"Sell",m:byDir["Sell"]||null,col:C.red},
+        ]}/>
+      </div>
+      <BTable title="Partial vs Full Hold" rows={[
+        {label:"Full Hold",m:byPart["Full Hold"]||null,col:C.sub},
+        {label:"Partial",  m:byPart["Partial"]  ||null,col:C.purple},
+      ]}/>
+    </div>
+  );
+}
+
+// ─── SETTIMANALE ──────────────────────────────────────────────────────────────
+function SettimanaleView() {
+  function getW(){
+    const d=new Date(),y=d.getFullYear();
+    const wn=Math.ceil(((d-new Date(y,0,1))/86400000+new Date(y,0,1).getDay()+1)/7);
+    return y+"-W"+String(wn).padStart(2,"0");
+  }
+  const [week,  setWeek]  = useState(getW());
+  const [data,  setData]  = useState({});
+  const [flash, setFlash] = useState("");
+  useEffect(function(){
+    (async function(){
+      try{ const r=await storage.get("jnl:v2:week:"+week); setData(r?JSON.parse(r.value):{}); }
+      catch(e){ setData({}); }
+    })();
+  },[week]);
+  async function save(){
+    try{ await storage.set("jnl:v2:week:"+week,JSON.stringify(data)); setFlash("Salvato \u2713"); setTimeout(function(){setFlash("");},2000); }
+    catch(e){}
+  }
+  const cinp = {background:C.muted,border:"1px solid "+C.border,borderRadius:3,padding:"3px 6px",fontSize:11,color:C.text,outline:"none",width:"100%",fontFamily:"inherit",boxSizing:"border-box"};
+  const FIELDS = [
+    ["piano_seguito","Piano seguito"],["regole_rispettate","Regole rispettate"],
+    ["n_trade","N. Trade"],["loss_win","Loss / Win"],["chiusura_anticipata","Chiusura anticipata"],
+    ["overconfidence","Overconfidence / Oversize"],["fattore_time","Fattore Time = Edge"],
+    ["gestione_posizione","Gestione posizione"],["score_10","Score 1/10"],["revenge","Revenge"],
+    ["esitazione","Esitazione"],["self_control","Self Control"],["bias_conferma","Bias di conferma"],
+    ["pre_market","Pre-Market corretto?"],["daily_profit","Daily Profit"],
+  ];
+  return (
+    <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"20px"}}>
+      <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:20}}>
+        <span style={{fontSize:10,color:C.sub,letterSpacing:"0.12em",textTransform:"uppercase"}}>Settimana</span>
+        <input type="week" value={week} onChange={function(e){setWeek(e.target.value);}} style={{background:C.muted,border:"1px solid "+C.border,borderRadius:4,color:C.text,fontSize:12,padding:"6px 10px",fontFamily:"inherit",outline:"none"}}/>
+      </div>
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed"}}>
+          <thead>
+            <tr style={{borderBottom:"1px solid "+C.border}}>
+              <th style={{textAlign:"left",padding:"6px 10px 6px 0",fontSize:10,color:C.sub,fontWeight:500,width:190}}>Metrica</th>
+              {DAYS_IT.map(function(d){ return <th key={d} style={{padding:"6px 4px",fontSize:10,color:C.sub,fontWeight:500,textAlign:"center",width:80}}>{d}</th>; })}
+            </tr>
+          </thead>
+          <tbody>
+            {FIELDS.map(function(field,i){
+              return (
+                <tr key={field[0]} style={{background:i%2===0?"transparent":C.dim+"80"}}>
+                  <td style={{padding:"5px 10px 5px 0",fontSize:11,color:C.sub}}>{field[1]}</td>
+                  {DAYS_IT.map(function(d){
+                    return (
+                      <td key={d} style={{padding:"4px"}}>
+                        <input type="text" value={data[field[0]+"_"+d]||""} onChange={function(e){ const key=field[0]+"_"+d; setData(function(prev){ const next={}; Object.keys(prev).forEach(function(k){next[k]=prev[k];}); next[key]=e.target.value; return next; }); }} style={cinp}/>
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{marginTop:20,borderTop:"0.5px solid "+C.border,paddingTop:16}}>
+        <div style={{fontSize:10,color:C.sub,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Note libere</div>
+        <textarea value={data["note_libere"]||""} onChange={function(e){ setData(function(prev){ const next={}; Object.keys(prev).forEach(function(k){next[k]=prev[k];}); next["note_libere"]=e.target.value; return next; }); }} rows={5} placeholder="Osservazioni, pattern, errori da correggere..." style={{width:"100%",background:C.muted,border:"1px solid "+C.border,borderRadius:4,color:C.text,fontSize:12,padding:"10px 12px",fontFamily:"inherit",outline:"none",resize:"vertical",boxSizing:"border-box",lineHeight:1.6}}/>
+      </div>
+      <button onClick={save} style={{marginTop:14,padding:"9px 24px",background:"transparent",border:"1px solid "+C.gold,borderRadius:4,color:C.gold,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.12em",textTransform:"uppercase"}}>{flash||"SALVA SETTIMANA"}</button>
+    </div>
+  );
+}
+
+// ─── TW IMPORT MODAL ──────────────────────────────────────────────────────────
+function TWImportModal({onClose, onSave, existing}) {
+  const [parsed,  setParsed]  = useState(null);
+  const [error,   setError]   = useState("");
+  const [saving,  setSaving]  = useState(false);
+  function handleFile(e) {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(ev) {
+      try {
+        const data = parseTWCsv(ev.target.result);
+        if (!data.length){ setError("Nessuna candela valida."); return; }
+        const times = data.map(function(c){return c.time;});
+        const first = unixToETDate(Math.min.apply(null,times));
+        const last  = unixToETDate(Math.max.apply(null,times));
+        const daySet = {};
+        data.forEach(function(c){ daySet[unixToETDate(c.time)]=1; });
+        const days = Object.keys(daySet).length;
+        setParsed({data:data,first:first,last:last,n:data.length,days:days}); setError("");
+      } catch(err){ setError("Errore: "+err.message); }
+    };
+    reader.readAsText(file);
+  }
+  async function handleSave(){
+    if (!parsed) return; setSaving(true);
+    await onSave(parsed.data,{first:parsed.first,last:parsed.last,n:parsed.n,days:parsed.days});
+    setSaving(false); onClose();
+  }
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:12,padding:24,width:"100%",maxWidth:520}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
+          <div>
+            <div style={{fontSize:13,color:C.text,fontWeight:600,letterSpacing:"0.08em"}}>IMPORT OHLC — TRADINGVIEW</div>
+            <div style={{fontSize:10,color:C.sub,marginTop:3}}>Toolbar TW in alto → Export chart data → ES M5 → Export</div>
+          </div>
+          <button onClick={onClose} style={{background:"transparent",border:"none",color:C.sub,fontSize:22,cursor:"pointer",lineHeight:1}}>{"\u00D7"}</button>
+        </div>
+        {existing && <div style={{marginBottom:12,padding:"8px 12px",background:C.green+"10",border:"1px solid "+C.green+"30",borderRadius:6}}><div style={{fontSize:10,color:C.green}}>{"Attuale: "+existing.first+" \u2192 "+existing.last+" \u00B7 "+existing.n+" candele"}</div></div>}
+        <div style={{border:"2px dashed "+C.border,borderRadius:8,padding:"28px 20px",textAlign:"center",marginBottom:14}}>
+          {!parsed ? (
+            <div>
+              <div style={{fontSize:28,marginBottom:10,opacity:0.25}}>{"\uD83D\uDCCA"}</div>
+              <div style={{fontSize:13,color:C.sub,marginBottom:16}}>Seleziona il CSV esportato da TradingView</div>
+              <label style={{display:"inline-block",padding:"9px 22px",border:"1px solid "+C.blue,borderRadius:4,color:C.blue,fontSize:12,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.1em"}}>
+                SELEZIONA FILE CSV
+                <input type="file" accept=".csv" onChange={handleFile} style={{display:"none"}}/>
+              </label>
+            </div>
+          ) : (
+            <div>
+              <div style={{fontSize:14,color:C.green,fontWeight:700,marginBottom:4}}>{parsed.n+" candele caricate"}</div>
+              <div style={{fontSize:12,color:C.text,marginBottom:8}}>{parsed.first+" \u2192 "+parsed.last+" \u00B7 "+parsed.days+" giorni"}</div>
+              <label style={{display:"inline-block",padding:"6px 16px",border:"1px solid "+C.border,borderRadius:4,color:C.sub,fontSize:10,fontFamily:"inherit",cursor:"pointer"}}>
+                Cambia file<input type="file" accept=".csv" onChange={handleFile} style={{display:"none"}}/>
+              </label>
+            </div>
+          )}
+        </div>
+        {error && <div style={{marginBottom:12,padding:"8px 12px",background:C.red+"10",border:"1px solid "+C.red+"30",borderRadius:4,fontSize:11,color:C.red}}>{error}</div>}
+        <div style={{padding:"10px 14px",background:C.gold+"08",border:"1px solid "+C.gold+"25",borderRadius:6,marginBottom:16}}>
+          <div style={{fontSize:10,color:C.gold,fontWeight:600,marginBottom:3}}>Timezone</div>
+          <div style={{fontSize:10,color:C.sub,lineHeight:1.6}}>TradingView UTC → Journal converte in ET per il matching con trade Tradovate.</div>
+        </div>
+        <div style={{display:"flex",gap:10}}>
+          <button onClick={handleSave} disabled={!parsed||saving} style={{padding:"9px 24px",background:"transparent",border:"1px solid "+(parsed?C.blue:C.muted),borderRadius:4,color:parsed?C.blue:C.muted,fontSize:11,fontFamily:"inherit",cursor:parsed?"pointer":"default",letterSpacing:"0.1em",textTransform:"uppercase"}}>
+            {saving?"SALVATAGGIO...":"SALVA E ATTIVA"}
+          </button>
+          <button onClick={onClose} style={{fontSize:11,color:C.sub,background:"transparent",border:"none",cursor:"pointer",fontFamily:"inherit"}}>Annulla</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── IMPORT MODAL (Tradovate) ─────────────────────────────────────────────────
+function ImportModal({onClose, trades, setTrades}) {
+  const [parsed,  setParsed]  = useState(null);
+  const [error,   setError]   = useState("");
+  const [saving,  setSaving]  = useState(false);
+  function handleFile(e) {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(ev) {
+      const res = parseTradovateCSV(ev.target.result);
+      if (res.errors.length && !res.trades.length){ setError(res.errors.join(" | ")); setParsed(null); return; }
+      setParsed(res); setError("");
+    };
+    reader.readAsText(file);
+  }
+  async function handleImport(){
+    if (!parsed || !parsed.trades.length) return;
+    setSaving(true);
+    const existingIds = {};
+    trades.forEach(function(t){ existingIds[t.id]=1; });
+    const newTrades = [...trades];
+    parsed.trades.forEach(function(t){ if (!existingIds[t.id]) newTrades.push(t); });
+    setTrades(newTrades);
+    try{ await storage.set("jnl:v2:trades",JSON.stringify(newTrades)); }catch(e){}
+    setSaving(false); onClose();
+  }
+  const winsN   = parsed ? parsed.trades.filter(function(t){return t.result==="Win";}).length  : 0;
+  const lossesN = parsed ? parsed.trades.filter(function(t){return t.result==="Loss";}).length : 0;
+  const besN    = parsed ? parsed.trades.filter(function(t){return t.result==="BE";}).length   : 0;
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:12,padding:24,width:"100%",maxWidth:580}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
+          <div>
+            <div style={{fontSize:13,color:C.text,fontWeight:600,letterSpacing:"0.08em"}}>IMPORT — TRADOVATE</div>
+            <div style={{fontSize:10,color:C.sub,marginTop:3}}>Position History CSV · Account → Settings → Orders → Download CSV</div>
+          </div>
+          <button onClick={onClose} style={{background:"transparent",border:"none",color:C.sub,fontSize:22,cursor:"pointer",lineHeight:1}}>{"\u00D7"}</button>
+        </div>
+        <div style={{border:"2px dashed "+C.border,borderRadius:8,padding:"24px 20px",textAlign:"center",marginBottom:14}}>
+          {!parsed ? (
+            <div>
+              <div style={{fontSize:13,color:C.sub,marginBottom:4}}>Seleziona il file Position_History.csv</div>
+              <div style={{fontSize:10,color:C.muted,marginBottom:18}}>Usa Position History, NON Orders</div>
+              <label style={{display:"inline-block",padding:"9px 22px",border:"1px solid "+C.gold,borderRadius:4,color:C.gold,fontSize:12,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.1em"}}>
+                SELEZIONA FILE CSV
+                <input type="file" accept=".csv" onChange={handleFile} style={{display:"none"}}/>
+              </label>
+            </div>
+          ) : (
+            <div>
+              <div style={{fontSize:14,color:C.green,fontWeight:700,marginBottom:8}}>{parsed.trades.length+" trade rilevati"}</div>
+              <div style={{display:"flex",justifyContent:"center",gap:16,marginBottom:8}}>
+                {winsN>0   && <span style={{fontSize:12,color:C.green,fontWeight:600}}>{"Win: "+winsN}</span>}
+                {lossesN>0 && <span style={{fontSize:12,color:C.red,  fontWeight:600}}>{"Loss: "+lossesN}</span>}
+                {besN>0    && <span style={{fontSize:12,color:C.sub,  fontWeight:600}}>{"BE: "+besN}</span>}
+              </div>
+              {parsed.errors.length>0 && <div style={{fontSize:10,color:C.gold,marginBottom:8}}>{parsed.errors.length+" righe ignorate"}</div>}
+              <label style={{display:"inline-block",padding:"6px 16px",border:"1px solid "+C.border,borderRadius:4,color:C.sub,fontSize:10,fontFamily:"inherit",cursor:"pointer",marginTop:4}}>
+                Cambia file<input type="file" accept=".csv" onChange={handleFile} style={{display:"none"}}/>
+              </label>
+            </div>
+          )}
+        </div>
+        {error && <div style={{marginBottom:12,padding:"8px 12px",background:C.red+"10",border:"1px solid "+C.red+"30",borderRadius:4,fontSize:11,color:C.red}}>{error}</div>}
+        <div style={{padding:"10px 14px",background:C.gold+"08",border:"1px solid "+C.gold+"25",borderRadius:6,marginBottom:16}}>
+          <div style={{fontSize:10,color:C.gold,fontWeight:600,marginBottom:3}}>Note</div>
+          <div style={{fontSize:10,color:C.sub,lineHeight:1.6}}>Orari convertiti da IT a ET automaticamente. P/L lordo (senza commissioni). Trade duplicati ignorati.</div>
+        </div>
+        <div style={{display:"flex",gap:10}}>
+          <button onClick={handleImport} disabled={!parsed||saving||!parsed.trades.length}
+            style={{padding:"9px 24px",background:"transparent",border:"1px solid "+(parsed&&parsed.trades.length?C.gold:C.muted),borderRadius:4,color:parsed&&parsed.trades.length?C.gold:C.muted,fontSize:11,fontFamily:"inherit",cursor:parsed&&parsed.trades.length?"pointer":"default",letterSpacing:"0.1em",textTransform:"uppercase"}}>
+            {saving?"IMPORTAZIONE...":("IMPORTA "+(parsed?parsed.trades.length:0)+" TRADE")}
+          </button>
+          <button onClick={onClose} style={{fontSize:11,color:C.sub,background:"transparent",border:"none",cursor:"pointer",fontFamily:"inherit"}}>Annulla</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── EXPORT MODAL ─────────────────────────────────────────────────────────────
+function ExportModal({trades, rv, onClose}) {
+  const headers = ["date","entry_time","exit_time","duration","direction","entry_price","exit_price","pnl_dollars","r","result","product","partial","notes"];
+  const rows = [...trades].reverse().map(function(t){
+    return headers.map(function(h){
+      if (h==="r")       return '"'+calcR(t.pnl_dollars||0,rv).toFixed(2)+'"';
+      if (h==="partial") return '"'+( t.partial?"Si":"No")+'"';
+      return '"'+String(t[h]||"").replace(/"/g,'\'\'')+'"';
+    }).join(",");
+  });
+  const csv = [headers.join(","), ...rows].join("\n");
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.90)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:12,padding:24,width:"100%",maxWidth:680}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+          <span style={{fontSize:13,color:C.text,fontWeight:600,letterSpacing:"0.08em"}}>EXPORT CSV</span>
+          <button onClick={onClose} style={{background:"transparent",border:"none",color:C.sub,fontSize:22,cursor:"pointer",lineHeight:1}}>{"\u00D7"}</button>
+        </div>
+        <textarea readOnly value={csv} rows={10} onFocus={function(e){e.target.select();}} style={{width:"100%",background:C.card,border:"1px solid "+C.border,borderRadius:6,color:C.sub,fontSize:10,padding:"12px",fontFamily:"'IBM Plex Mono',monospace",outline:"none",resize:"none",boxSizing:"border-box"}}/>
+        <div style={{display:"flex",gap:10,marginTop:12}}>
+          <button onClick={function(){navigator.clipboard.writeText(csv);}} style={{padding:"8px 20px",background:"transparent",border:"1px solid "+C.gold,borderRadius:4,color:C.gold,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.1em",textTransform:"uppercase"}}>COPIA TUTTO</button>
+          <button onClick={onClose} style={{fontSize:11,color:C.sub,background:"transparent",border:"none",cursor:"pointer",fontFamily:"inherit"}}>Chiudi</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── SETTINGS MODAL ───────────────────────────────────────────────────────────
+function SettingsModal({rv, onSave, onClose}) {
+  const [val, setVal] = useState(String(rv));
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.90)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:12,padding:26,width:380}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:22}}>
+          <span style={{fontSize:13,color:C.text,fontWeight:600,letterSpacing:"0.08em"}}>IMPOSTAZIONI</span>
+          <button onClick={onClose} style={{background:"transparent",border:"none",color:C.sub,fontSize:22,cursor:"pointer",lineHeight:1}}>{"\u00D7"}</button>
+        </div>
+        <div style={{marginBottom:20}}>
+          <div style={{fontSize:10,color:C.sub,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:10}}>{"1R = $ \u00B7 valore fisso in dollari"}</div>
+          <input type="number" value={val} onChange={function(e){setVal(e.target.value);}} min="1" step="25" style={{width:"100%",background:C.card,border:"1px solid "+C.border,borderRadius:4,color:C.text,fontSize:22,fontWeight:700,padding:"12px 16px",fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}/>
+          <div style={{fontSize:10,color:C.sub,marginTop:8}}>{"Default $250 \u00B7 Aggiorna ad ogni nuovo conto prop"}</div>
+          <div style={{fontSize:10,color:C.sub,marginTop:4}}>{"Esempio: +$500 \u2192 "+(500/(Number(val)||250)).toFixed(2)+"R"}</div>
+        </div>
+        <div style={{display:"flex",gap:10}}>
+          <button onClick={function(){onSave(Number(val)||R_DEFAULT);}} style={{padding:"10px 26px",background:"transparent",border:"1px solid "+C.gold,borderRadius:4,color:C.gold,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.12em",textTransform:"uppercase"}}>SALVA</button>
+          <button onClick={onClose} style={{fontSize:11,color:C.sub,background:"transparent",border:"none",cursor:"pointer",fontFamily:"inherit"}}>Annulla</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+function Journal() {
+  const [tab,          setTab]          = useState("dashboard");
+  const [trades,       setTrades]       = useState([]);
+  const [rv,           setRv]           = useState(R_DEFAULT);
+  const [ohlcData,     setOhlcData]     = useState([]);
+  const [ohlcMeta,     setOhlcMeta]     = useState(null);
+  const [showOnlyR,    setShowOnlyR]    = useState(false);
+  const [loading,      setLoading]      = useState(true);
+  const [showImport,   setShowImport]   = useState(false);
+  const [showExport,   setShowExport]   = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showTWImport, setShowTWImport] = useState(false);
+  const [time,         setTime]         = useState("");
+  function getTime(){
+    const d=new Date();
+    return DOW_IT[d.getDay()]+" "+d.toLocaleDateString("it-IT")+" "+d.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});
+  }
+  useEffect(function(){
+    setTime(getTime());
+    const t=setInterval(function(){setTime(getTime());},30000);
+    return function(){clearInterval(t);};
+  },[]);
+  useEffect(function(){
+    (async function(){
+      try{
+        const tr=await storage.get("jnl:v2:trades");
+        const st=await storage.get("jnl:v2:settings");
+        const oh=await storage.get("jnl:v2:ohlc");
+        const om=await storage.get("jnl:v2:ohlcmeta");
+        if(tr) setTrades(JSON.parse(tr.value));
+        else{ setTrades(SEED); await storage.set("jnl:v2:trades",JSON.stringify(SEED)); }
+        if(st){ const s=JSON.parse(st.value); if(s.rv) setRv(s.rv); }
+        if(oh){ const arr=JSON.parse(oh.value); setOhlcData(arr.map(function(c){return{time:c[0],high:c[1],low:c[2]};})); }
+        if(om) setOhlcMeta(JSON.parse(om.value));
+      }catch(e){}
+      setLoading(false);
+    })();
+  },[]);
+  async function saveSettings(newR){
+    setRv(newR);
+    try{ await storage.set("jnl:v2:settings",JSON.stringify({rv:newR})); }catch(e){}
+    setShowSettings(false);
+  }
+  async function saveTWOhlc(data, meta){
+    setOhlcData(data); setOhlcMeta(meta);
+    try{
+      const compact=data.map(function(c){return[c.time,c.high,c.low];});
+      await storage.set("jnl:v2:ohlc",JSON.stringify(compact));
+      await storage.set("jnl:v2:ohlcmeta",JSON.stringify(meta));
+    }catch(e){}
+  }
+  function toggleR(){ setShowOnlyR(function(v){return !v;}); }
+  const TABS = [{k:"dashboard",l:"DASHBOARD"},{k:"calendario",l:"CALENDARIO"},{k:"settimanale",l:"SETTIMANALE"}];
+  if (loading) return (
+    <div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:C.sub,fontFamily:"'IBM Plex Mono',monospace",fontSize:12}}>
+      Caricamento...
+    </div>
+  );
+  return (
+    <div style={{fontFamily:"'IBM Plex Mono','Courier New',monospace",fontSize:13,background:C.bg,minHeight:"100vh",color:C.text,padding:"20px 22px",boxSizing:"border-box"}}>
+      <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Barlow+Condensed:wght@400;600;700&display=swap" rel="stylesheet"/>
+      {showImport    && <ImportModal   onClose={function(){setShowImport(false);}}   trades={trades} setTrades={setTrades}/>}
+      {showExport    && <ExportModal   trades={trades} rv={rv}                        onClose={function(){setShowExport(false);}}/>}
+      {showSettings  && <SettingsModal rv={rv}         onSave={saveSettings}          onClose={function(){setShowSettings(false);}}/>}
+      {showTWImport  && <TWImportModal onClose={function(){setShowTWImport(false);}}  onSave={saveTWOhlc} existing={ohlcMeta}/>}
+      <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:22,paddingBottom:18,borderBottom:"1px solid "+C.border}}>
+        <div>
+          <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:36,fontWeight:700,color:C.text,letterSpacing:"0.04em",lineHeight:1}}>
+            {"Hello "}<span style={{color:C.gold}}>Noemi</span>
+          </div>
+          <div style={{fontSize:10,color:C.sub,marginTop:5,letterSpacing:"0.12em"}}>
+            {"ES FUTURES JOURNAL \u00B7 "+trades.length+" trade \u00B7 1R = $"+rv}
+            {ohlcMeta && <span style={{color:C.green,marginLeft:10}}>{"\u00B7 OHLC "+ohlcMeta.days+"gg"}</span>}
+          </div>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:8}}>
+          <span style={{fontSize:11,color:C.sub}}>{time}</span>
+          <button onClick={function(){setShowSettings(true);}} style={{background:"transparent",border:"1px solid "+C.border,borderRadius:4,color:C.sub,fontSize:10,padding:"5px 14px",cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.1em",textTransform:"uppercase"}}>
+            {"\u2699 settings"}
+          </button>
+        </div>
+      </div>
+      <div style={{display:"flex",borderBottom:"1px solid "+C.border,marginBottom:22,gap:2}}>
+        {TABS.map(function(t){
+          return (
+            <button key={t.k} onClick={function(){setTab(t.k);}} style={{padding:"10px 26px",fontSize:13,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,letterSpacing:"0.14em",cursor:"pointer",background:"transparent",border:"none",borderBottom:"2px solid "+(tab===t.k?C.gold:C.border),color:tab===t.k?C.gold:C.sub,transition:"all 0.15s"}}>
+              {t.l}
+            </button>
+          );
+        })}
+      </div>
+      {tab==="dashboard"   && <Dashboard      trades={trades} rv={rv} ohlcData={ohlcData}/>}
+      {tab==="calendario"  && <CalendarioView  trades={trades} rv={rv} onImport={function(){setShowImport(true);}} onExport={function(){setShowExport(true);}} onTWImport={function(){setShowTWImport(true);}} ohlcMeta={ohlcMeta} showOnlyR={showOnlyR} onToggleR={toggleR}/>}
+      {tab==="settimanale" && <SettimanaleView/>}
+    </div>
+  );
+}
+
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(React.createElement(Journal));
+  </script>
+</body>
+</html>

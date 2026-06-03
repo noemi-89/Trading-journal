@@ -985,7 +985,7 @@ function Journal() {
         const oh=await storage.get("jnl:v2:ohlc");
         const om=await storage.get("jnl:v2:ohlcmeta");
         if(tr) setTrades(JSON.parse(tr.value));
-        else{ setTrades(SEED); await storage.set("jnl:v2:trades",JSON.stringify(SEED)); }
+        // else: journal vuoto, pronto per trade reali
         if(st){ const s=JSON.parse(st.value); if(s.rv) setRv(s.rv); }
         if(oh){ const arr=JSON.parse(oh.value); setOhlcData(arr.map(function(c){return{time:c[0],high:c[1],low:c[2]};})); }
         if(om) setOhlcMeta(JSON.parse(om.value));

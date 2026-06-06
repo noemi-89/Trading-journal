@@ -46,12 +46,15 @@ const MONTHS_IT  = ["Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno","Lug
 const DAYS_IT    = ["LUN","MAR","MER","GIO","VEN"];
 const DOW_IT     = ["DOM","LUN","MAR","MER","GIO","VEN","SAB"];
 const FASCIA_LIST= [
-  {key:"Gold Zone",    col:"#F5A020"},
-  {key:"Dead Zone",    col:"#4A5060"},
-  {key:"Second Window",col:"#5A8FE8"},
-  {key:"Midday",       col:"#9878D8"},
-  {key:"Power Hour",   col:"#1EBF6A"},
-  {key:"Altro",        col:"#374050"},
+  {key:"Gold Zone",     col:"#F5A020"},
+  {key:"Silver Zone",   col:"#A8B8CC"},
+  {key:"Dead Zone",     col:"#4A5060"},
+  {key:"Mid AM",        col:"#5A8FE8"},
+  {key:"Lunch",         col:"#9878D8"},
+  {key:"PM Post Lunch", col:"#E87830"},
+  {key:"PM Session",    col:"#D055A0"},
+  {key:"Power Hour",    col:"#1EBF6A"},
+  {key:"Altro",         col:"#374050"},
 ];
 const FASCIA_MAP = {};
 FASCIA_LIST.forEach(function(item){ FASCIA_MAP[item.key] = item.col; });
@@ -80,11 +83,14 @@ function getFascia(t) {
   if (!t) return "Altro";
   const parts = t.split(":"); const h = Number(parts[0]); const m = Number(parts[1]);
   const mins = h * 60 + m;
-  if (mins >= 570 && mins <= 630) return "Gold Zone";
-  if (mins > 630  && mins <= 660) return "Dead Zone";
-  if (mins > 660  && mins <= 735) return "Second Window";
-  if (mins > 735  && mins < 900)  return "Midday";
-  if (mins >= 900)                 return "Power Hour";
+  if (mins >= 570 && mins <= 600) return "Gold Zone";      // 9:30-10:00
+  if (mins >= 601 && mins <= 630) return "Silver Zone";    // 10:01-10:30
+  if (mins >= 631 && mins <= 660) return "Dead Zone";      // 10:31-11:00
+  if (mins >= 661 && mins <= 720) return "Mid AM";         // 11:01-12:00
+  if (mins >= 721 && mins <= 779) return "Lunch";          // 12:01-12:59
+  if (mins >= 780 && mins <= 840) return "PM Post Lunch";  // 13:00-14:00
+  if (mins >= 841 && mins <= 899) return "PM Session";     // 14:01-14:59
+  if (mins >= 900)                return "Power Hour";     // 15:00+
   return "Altro";
 }
 function getSession(t) {
@@ -103,9 +109,9 @@ function fmtDur(m)       { if (m == null) return "\u2014"; if (m < 60) return Ma
 function getDow(ds)      { if (!ds) return "?"; return DOW_IT[new Date(ds + "T12:00:00").getDay()] || "?"; }
 function dayBg(r) {
   if (r == null || isNaN(r) || Math.abs(r) < 0.01) return "transparent";
-  const i = Math.min(Math.abs(r) / 4, 1);
-  if (r > 0) return "rgba(30,191,106," + (0.12 + 0.48 * i).toFixed(2) + ")";
-  return "rgba(232,69,69," + (0.12 + 0.48 * i).toFixed(2) + ")";
+  const i = Math.min(Math.abs(r) / 2.5, 1);
+  if (r > 0) return "rgba(30,191,106," + (0.50 + 0.42 * i).toFixed(2) + ")";
+  return "rgba(232,69,69," + (0.50 + 0.42 * i).toFixed(2) + ")";
 }
 function getCalendarWeeks(year, month) {
   const first = new Date(year, month, 1);
@@ -121,7 +127,7 @@ function getCalendarWeeks(year, month) {
     for (let d = 0; d < 5; d++) {
       const dt = new Date(cur);
       dt.setDate(dt.getDate() + d);
-      const ds = dt.toISOString().slice(0, 10);
+      const ds = dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0") + "-" + String(dt.getDate()).padStart(2, "0");
       week.push({ day: dt.getDate(), dateStr: ds, inMonth: dt.getMonth() === month && dt.getFullYear() === year });
     }
     weeks.push(week);
@@ -409,14 +415,14 @@ function MetricCard({label, value, sub, color}) {
 // ─── BREAKDOWN ────────────────────────────────────────────────────────────────
 function BRow({label, m, col}) {
   if (!m) return (
-    <tr style={{borderTop:"0.5px solid "+C.muted}}>
-      <td style={{padding:"8px 8px 8px 0",fontSize:11,color:col||C.sub}}>{label}</td>
-      <td colSpan={4} style={{textAlign:"center",fontSize:10,color:C.muted}}>{"\u2014"}</td>
+    <tr style={{borderTop:"0.5px solid "+C.border}}>
+      <td style={{padding:"8px 8px 8px 0",fontSize:11,color:col||C.gold}}>{label}</td>
+      <td colSpan={4} style={{textAlign:"center",fontSize:10,color:C.sub}}>{"\u2014"}</td>
     </tr>
   );
   return (
-    <tr style={{borderTop:"0.5px solid "+C.muted}}>
-      <td style={{padding:"8px 8px 8px 0",fontSize:11,color:col||C.text,fontWeight:500}}>{label}</td>
+    <tr style={{borderTop:"0.5px solid "+C.border}}>
+      <td style={{padding:"8px 8px 8px 0",fontSize:11,color:col||C.gold,fontWeight:600}}>{label}</td>
       <td style={{padding:"8px 4px",fontSize:12,fontWeight:700,color:m.ev>=0?C.green:C.red,textAlign:"center"}}>{(m.ev>=0?"+":"")+m.ev.toFixed(2)+"R"}</td>
       <td style={{padding:"8px 4px",fontSize:11,color:m.wr>=50?C.green:C.red,textAlign:"center"}}>{m.wr.toFixed(0)+"%"}</td>
       <td style={{padding:"8px 4px",fontSize:11,color:m.pf>=1?C.green:C.red,textAlign:"center"}}>{isFinite(m.pf)?m.pf.toFixed(2):"\u221E"}</td>
@@ -431,8 +437,8 @@ function BTable({title, rows}) {
       <table style={{width:"100%",borderCollapse:"collapse"}}>
         <thead>
           <tr>
-            <th style={{textAlign:"left",paddingBottom:6,fontSize:9,color:C.muted,fontWeight:400,minWidth:80}}>{""}</th>
-            {["EV","WR","PF","N"].map(function(h){ return <th key={h} style={{textAlign:"center",padding:"0 4px 6px",fontSize:9,color:C.muted,fontWeight:400}}>{h}</th>; })}
+            <th style={{textAlign:"left",paddingBottom:6,fontSize:9,color:C.sub,fontWeight:400,minWidth:80}}>{""}</th>
+            {["EV","WR","PF","N"].map(function(h){ return <th key={h} style={{textAlign:"center",padding:"0 4px 6px",fontSize:9,color:C.sub,fontWeight:600}}>{h}</th>; })}
           </tr>
         </thead>
         <tbody>
@@ -445,19 +451,23 @@ function BTable({title, rows}) {
 
 // ─── DAY CELL ─────────────────────────────────────────────────────────────────
 function DayCell({info, stats, rv, today, showOnlyR}) {
-  const r    = stats ? calcR(stats.totalPnl, rv) : null;
-  const bg   = stats ? dayBg(r) : "transparent";
-  const inM  = info.inMonth;
+  const r       = stats ? calcR(stats.totalPnl, rv) : null;
+  const isColored = stats && r !== null && Math.abs(r) >= 0.01;
+  const bg      = isColored ? dayBg(r) : "transparent";
+  const inM     = info.inMonth;
   const isToday = info.dateStr === today;
-  const textC = !inM ? C.muted : r == null ? C.sub : r > 0 ? C.green : r < 0 ? C.red : C.sub;
+  const numCol  = isToday ? C.gold : (isColored && inM ? "rgba(255,255,255,0.75)" : C.sub);
+  const mainCol = !inM ? C.muted  : isColored ? "#FFFFFF" : C.sub;
+  const subCol  = !inM ? C.muted  : isColored ? "rgba(255,255,255,0.80)" : C.muted;
+  const bdr     = isToday ? C.gold+"90" : (isColored && inM ? "transparent" : C.border);
   return (
-    <div style={{background:inM?(bg||C.card):C.dim,border:"1px solid "+(isToday?C.gold+"70":C.border),borderRadius:6,padding:"8px 10px",minHeight:72,opacity:inM?1:0.3}}>
-      <div style={{fontSize:11,color:isToday?C.gold:C.sub,fontWeight:isToday?700:400,marginBottom:5}}>{info.day}</div>
+    <div style={{background:inM?(isColored?bg:C.card):C.dim,border:"1px solid "+bdr,borderRadius:6,padding:"8px 10px",minHeight:72,opacity:inM?1:0.3}}>
+      <div style={{fontSize:11,color:numCol,fontWeight:isToday?700:400,marginBottom:4}}>{info.day}</div>
       {stats && inM && (
         <div>
-          <div style={{fontSize:14,fontWeight:700,color:textC,lineHeight:1,marginBottom:3}}>{fmtR(r)}</div>
-          {!showOnlyR && <div style={{fontSize:10,color:textC,opacity:0.7,marginBottom:3}}>{fmtD(stats.totalPnl)}</div>}
-          <div style={{fontSize:9,color:C.sub}}>{stats.n+"t \u00B7 "+stats.wr.toFixed(0)+"%W"}</div>
+          <div style={{fontSize:16,fontWeight:700,color:mainCol,lineHeight:1,marginBottom:3}}>{fmtR(r)}</div>
+          {!showOnlyR && <div style={{fontSize:10,color:subCol,marginBottom:3}}>{fmtD(stats.totalPnl)}</div>}
+          <div style={{fontSize:9,color:subCol}}>{stats.n+"t \u00B7 "+stats.wr.toFixed(0)+"%W"}</div>
         </div>
       )}
     </div>
@@ -476,13 +486,16 @@ function WeekCell({weekTrades, rv, showOnlyR}) {
   const r   = calcR(totalPnl, rv);
   const wins = closed.filter(function(t){ return t.result === "Win"; }).length;
   const wr  = closed.length ? wins / closed.length * 100 : 0;
-  const col = r > 0 ? C.green : r < 0 ? C.red : C.sub;
+  const isColored = Math.abs(r) >= 0.01;
+  const bg  = isColored ? dayBg(r) : C.card;
+  const mainCol = isColored ? "#FFFFFF" : C.sub;
+  const subCol  = isColored ? "rgba(255,255,255,0.80)" : C.muted;
   return (
-    <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:6,padding:"8px 10px",minHeight:72}}>
-      <div style={{fontSize:9,color:C.sub,marginBottom:5,letterSpacing:"0.08em"}}>TOT</div>
-      <div style={{fontSize:13,fontWeight:700,color:col,lineHeight:1,marginBottom:2}}>{fmtR(r)}</div>
-      {!showOnlyR && <div style={{fontSize:10,color:col,opacity:0.7,marginBottom:2}}>{fmtD(totalPnl)}</div>}
-      <div style={{fontSize:9,color:C.sub}}>{closed.length+"t \u00B7 "+wr.toFixed(0)+"%W"}</div>
+    <div style={{background:bg,border:"1px solid "+(isColored?"transparent":C.border),borderRadius:6,padding:"8px 10px",minHeight:72}}>
+      <div style={{fontSize:9,color:isColored?"rgba(255,255,255,0.65)":C.sub,marginBottom:4,letterSpacing:"0.08em",fontWeight:600}}>WEEK</div>
+      <div style={{fontSize:14,fontWeight:700,color:mainCol,lineHeight:1,marginBottom:2}}>{fmtR(r)}</div>
+      {!showOnlyR && <div style={{fontSize:10,color:subCol,marginBottom:2}}>{fmtD(totalPnl)}</div>}
+      <div style={{fontSize:9,color:subCol}}>{closed.length+"t \u00B7 "+wr.toFixed(0)+"%W"}</div>
     </div>
   );
 }
@@ -654,7 +667,7 @@ function Dashboard({trades, rv, ohlcData}) {
           );
         })}
       </div>
-      <BTable title="Performance per giorno della settimana" rows={DAYS_IT.map(function(d){ return {label:d,m:byDow[d]||null,col:"#7A8FA8"}; })}/>
+      <BTable title="Performance per giorno della settimana" rows={DAYS_IT.map(function(d){ return {label:d,m:byDow[d]||null,col:C.gold}; })}/>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         <BTable title="Performance per session" rows={[
           {label:"Pre Market",m:bySess["Pre Market"]||null,col:C.sub},

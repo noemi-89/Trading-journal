@@ -253,6 +253,14 @@ function parseTradovateCSV(text) {
   return { trades: trades, errors: errors };
 }
 
+
+// ─── DETECT OHLC PRODUCT ─────────────────────────────────────────────────────
+function detectOHLCProduct(data) {
+  if (!data || !data.length) return "ES";
+  const mid = (data[0].high + data[0].low) / 2;
+  return mid > 15000 ? "NQ" : "ES";
+}
+
 // ─── MAE / MFE ────────────────────────────────────────────────────────────────
 function parseTWCsv(text) {
   const lines = text.trim().split("\n").filter(function(l) { return l.trim(); });
@@ -274,8 +282,10 @@ function etToUnix(dateStr, timeStr) {
   const dp = dateStr.split("-"); const tp = timeStr.split(":");
   return Math.floor(new Date(Date.UTC(parseInt(dp[0]), parseInt(dp[1]) - 1, parseInt(dp[2]), parseInt(tp[0]) + 4, parseInt(tp[1]), 0)).getTime() / 1000);
 }
-function calcMaeMfe(trade, ohlcData) {
-  if (!trade.entry_price || !trade.exit_price || !trade.entry_time || !trade.exit_time || !ohlcData || !ohlcData.length) return null;
+function calcMaeMfe(trade, ohlcES, ohlcNQ) {
+  const product = (trade.product || "ES").toUpperCase();
+  const ohlcData = (product === "NQ" || product === "MNQ") ? (ohlcNQ || []) : (ohlcES || []);
+  if (!trade.entry_price || !trade.exit_price || !trade.entry_time || !trade.exit_time || !ohlcData.length) return null;
   const entryUnix = etToUnix(trade.date, trade.entry_time);
   const exitUnix  = etToUnix(trade.date, trade.exit_time);
   const candles = ohlcData.filter(function(c) { return c.time >= entryUnix - 300 && c.time <= exitUnix; });
@@ -791,9 +801,9 @@ function CalendarioView({trades, rv, onImport, onExport, onTWImport, ohlcMeta, s
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
-function Dashboard({trades, rv, ohlcData}) {
+function Dashboard({trades, rv, ohlcData, ohlcNQ}) {
   const m = calcStats(trades, rv);
-  const mmStats = calcMaeMfeStats(trades, ohlcData);
+  const mmStats = calcMaeMfeStats(trades, ohlcData, ohlcNQ);
   if (!m) return <div style={{textAlign:"center",padding:"60px 20px",color:C.sub,fontSize:13}}>Nessun trade. Importa il primo CSV dal tab Calendario.</div>;
   const byFascia = groupBy(trades, function(t){ return getFascia(t.entry_time||""); }, rv);
   const byDow    = groupBy(trades, function(t){ return getDow(t.date); }, rv);
@@ -898,56 +908,99 @@ function Dashboard({trades, rv, ohlcData}) {
 
 // ─── SETTIMANALE ──────────────────────────────────────────────────────────────
 function SettimanaleView() {
-  function getW(){
-    const d=new Date(),y=d.getFullYear();
-    const wn=Math.ceil(((d-new Date(y,0,1))/86400000+new Date(y,0,1).getDay()+1)/7);
-    return y+"-W"+String(wn).padStart(2,"0");
-  }
+  function getW(){const d=new Date(),y=d.getFullYear(),wn=Math.ceil(((d-new Date(y,0,1))/86400000+new Date(y,0,1).getDay()+1)/7);return y+"-W"+String(wn).padStart(2,"0");}
   const [week,  setWeek]  = useState(getW());
   const [data,  setData]  = useState({});
   const [flash, setFlash] = useState("");
+
   useEffect(function(){
     (async function(){
       try{ const r=await storage.get("jnl:v2:week:"+week); setData(r?JSON.parse(r.value):{}); }
       catch(e){ setData({}); }
     })();
   },[week]);
+
   async function save(){
     try{ await storage.set("jnl:v2:week:"+week,JSON.stringify(data)); setFlash("Salvato \u2713"); setTimeout(function(){setFlash("");},2000); }
     catch(e){}
   }
-  const cinp = {background:C.muted,border:"1px solid "+C.border,borderRadius:3,padding:"3px 6px",fontSize:11,color:C.text,outline:"none",width:"100%",fontFamily:"inherit",boxSizing:"border-box"};
+
+  function setVal(key, day, val) {
+    setData(function(prev){
+      const next={}; Object.keys(prev).forEach(function(k){next[k]=prev[k];});
+      const k=key+"_"+day; next[k]=prev[k]===val?"":val;
+      return next;
+    });
+  }
+
   const FIELDS = [
-    ["piano_seguito","Piano seguito"],["regole_rispettate","Regole rispettate"],
-    ["n_trade","N. Trade"],["loss_win","Loss / Win"],["chiusura_anticipata","Chiusura anticipata"],
-    ["overconfidence","Overconfidence / Oversize"],["fattore_time","Fattore Time = Edge"],
-    ["gestione_posizione","Gestione posizione"],["score_10","Score 1/10"],["revenge","Revenge"],
-    ["esitazione","Esitazione"],["self_control","Self Control"],["bias_conferma","Bias di conferma"],
-    ["pre_market","Pre-Market corretto?"],["daily_profit","Daily Profit"],
+    {n:1,  key:"piano_seguito",      label:"Piano seguito",         opts:["No","Parz","Si"]},
+    {n:2,  key:"regole_rispettate",  label:"Regole rispettate",     opts:["No","Parz","Si"]},
+    {n:3,  key:"chiusura_anticipata",label:"Chiusura anticipata",   opts:["No","Si"]},
+    {n:4,  key:"overconfidence",     label:"Overconfidence",        opts:["No","Si"]},
+    {n:5,  key:"fattore_time",       label:"Fattore Time = Edge",   opts:["No","Parz","Si"]},
+    {n:6,  key:"gestione_posizione", label:"Gestione posizione",    opts:["1","2","3","4","5"]},
+    {n:7,  key:"score_10",           label:"Score 1/10",            opts:[], text:true},
+    {n:8,  key:"revenge",            label:"Revenge",               opts:["No","Si"]},
+    {n:9,  key:"esitazione",         label:"Esitazione",            opts:["No","Si"]},
+    {n:10, key:"self_control",       label:"Self Control",          opts:["1","2","3","4","5"]},
+    {n:11, key:"bias_conferma",      label:"Bias di conferma",      opts:["No","Si"]},
+    {n:12, key:"pre_market",         label:"Pre-Market corretto?",  opts:["No","Parz","Si"]},
   ];
+
+  const cinp = {background:C.muted,border:"1px solid "+C.gold+"40",borderRadius:3,padding:"3px 6px",fontSize:11,color:C.gold,outline:"none",width:"100%",fontFamily:"inherit",boxSizing:"border-box",textAlign:"center"};
+
   return (
-    <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"20px"}}>
-      <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:20}}>
-        <span style={{fontSize:10,color:C.sub,letterSpacing:"0.12em",textTransform:"uppercase"}}>Settimana</span>
-        <input type="week" value={week} onChange={function(e){setWeek(e.target.value);}} style={{background:C.muted,border:"1px solid "+C.border,borderRadius:4,color:C.text,fontSize:12,padding:"6px 10px",fontFamily:"inherit",outline:"none"}}/>
+    <div style={{background:C.card,border:"1px solid "+C.gold+"40",borderRadius:10,padding:"20px"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20,paddingBottom:14,borderBottom:"1px solid "+C.gold+"30"}}>
+        <div style={{display:"flex",alignItems:"center",gap:14}}>
+          <span style={{fontSize:10,color:C.gold,letterSpacing:"0.12em",textTransform:"uppercase",fontWeight:700}}>Settimana</span>
+          <input type="week" value={week} onChange={function(e){setWeek(e.target.value);}} style={{background:C.muted,border:"1px solid "+C.gold+"50",borderRadius:4,color:C.gold,fontSize:12,padding:"6px 10px",fontFamily:"inherit",outline:"none"}}/>
+        </div>
+        <button onClick={save} style={{padding:"8px 20px",background:"transparent",border:"1px solid "+C.gold,borderRadius:4,color:C.gold,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.12em",textTransform:"uppercase",fontWeight:700}}>
+          {flash||"SALVA"}
+        </button>
       </div>
       <div style={{overflowX:"auto"}}>
         <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed"}}>
           <thead>
-            <tr style={{borderBottom:"1px solid "+C.border}}>
-              <th style={{textAlign:"left",padding:"6px 10px 6px 0",fontSize:10,color:C.sub,fontWeight:500,width:190}}>Metrica</th>
-              {DAYS_IT.map(function(d){ return <th key={d} style={{padding:"6px 4px",fontSize:10,color:C.sub,fontWeight:500,textAlign:"center",width:80}}>{d}</th>; })}
+            <tr style={{borderBottom:"1px solid "+C.gold+"50",background:C.gold+"08"}}>
+              <th style={{textAlign:"left",padding:"10px 10px 10px 0",fontSize:10,color:C.gold,fontWeight:700,width:190,letterSpacing:"0.1em"}}># METRICA</th>
+              {DAYS_IT.map(function(d){ return <th key={d} style={{padding:"10px 4px",fontSize:11,color:C.gold,fontWeight:700,textAlign:"center",width:88,letterSpacing:"0.12em",borderLeft:"0.5px solid "+C.gold+"20"}}>{d}</th>; })}
             </tr>
           </thead>
           <tbody>
             {FIELDS.map(function(field,i){
               return (
-                <tr key={field[0]} style={{background:i%2===0?"transparent":C.dim+"80"}}>
-                  <td style={{padding:"5px 10px 5px 0",fontSize:11,color:C.sub}}>{field[1]}</td>
+                <tr key={field.key} style={{borderTop:"0.5px solid "+C.gold+"20",background:i%2===0?"transparent":C.gold+"04"}}>
+                  <td style={{padding:"8px 10px 8px 0",verticalAlign:"middle"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{fontSize:11,color:C.gold+"70",fontWeight:700,minWidth:20}}>{field.n}.</span>
+                      <span style={{fontSize:11,color:C.gold,fontWeight:600,lineHeight:1.3}}>{field.label}</span>
+                    </div>
+                  </td>
                   {DAYS_IT.map(function(d){
+                    const val=data[field.key+"_"+d]||"";
                     return (
-                      <td key={d} style={{padding:"4px"}}>
-                        <input type="text" value={data[field[0]+"_"+d]||""} onChange={function(e){ const key=field[0]+"_"+d; setData(function(prev){ const next={}; Object.keys(prev).forEach(function(k){next[k]=prev[k];}); next[key]=e.target.value; return next; }); }} style={cinp}/>
+                      <td key={d} style={{padding:"6px 4px",textAlign:"center",verticalAlign:"middle",borderLeft:"0.5px solid "+C.gold+"15"}}>
+                        {field.text?(
+                          <input type="text" value={val}
+                            onChange={function(e){const k=field.key+"_"+d;setData(function(prev){const next={};Object.keys(prev).forEach(function(k){next[k]=prev[k];});next[k]=e.target.value;return next;});}}
+                            onBlur={save} style={cinp} placeholder="—"/>
+                        ):(
+                          <div style={{display:"flex",flexWrap:"wrap",justifyContent:"center",gap:2}}>
+                            {field.opts.map(function(opt){
+                              const sel=val===opt;
+                              const oc=opt==="Si"?C.green:opt==="No"?C.red:opt==="Parz"?C.gold:C.blue;
+                              return(
+                                <button key={opt} onClick={function(){setVal(field.key,d,opt);setTimeout(save,150);}}
+                                  style={{padding:"3px 6px",background:sel?oc+"30":C.muted,border:"1px solid "+(sel?oc:C.border),borderRadius:3,color:sel?oc:C.sub,fontSize:9,cursor:"pointer",fontFamily:"inherit",fontWeight:sel?700:400,lineHeight:1.4,transition:"all 0.1s"}}>
+                                  {opt}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
                       </td>
                     );
                   })}
@@ -957,11 +1010,14 @@ function SettimanaleView() {
           </tbody>
         </table>
       </div>
-      <div style={{marginTop:20,borderTop:"0.5px solid "+C.border,paddingTop:16}}>
-        <div style={{fontSize:10,color:C.sub,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Note libere</div>
-        <textarea value={data["note_libere"]||""} onChange={function(e){ setData(function(prev){ const next={}; Object.keys(prev).forEach(function(k){next[k]=prev[k];}); next["note_libere"]=e.target.value; return next; }); }} rows={5} placeholder="Osservazioni, pattern, errori da correggere..." style={{width:"100%",background:C.muted,border:"1px solid "+C.border,borderRadius:4,color:C.text,fontSize:12,padding:"10px 12px",fontFamily:"inherit",outline:"none",resize:"vertical",boxSizing:"border-box",lineHeight:1.6}}/>
+      <div style={{marginTop:20,borderTop:"0.5px solid "+C.gold+"30",paddingTop:16}}>
+        <div style={{fontSize:10,color:C.gold,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8,fontWeight:700}}>Note libere</div>
+        <textarea value={data["note_libere"]||""}
+          onChange={function(e){setData(function(prev){const next={};Object.keys(prev).forEach(function(k){next[k]=prev[k];});next["note_libere"]=e.target.value;return next;});}}
+          onBlur={save}
+          rows={4} placeholder="Osservazioni, pattern, errori da correggere..."
+          style={{width:"100%",background:C.muted,border:"1px solid "+C.gold+"40",borderRadius:4,color:C.text,fontSize:12,padding:"10px 12px",fontFamily:"inherit",outline:"none",resize:"vertical",boxSizing:"border-box",lineHeight:1.6}}/>
       </div>
-      <button onClick={save} style={{marginTop:14,padding:"9px 24px",background:"transparent",border:"1px solid "+C.gold,borderRadius:4,color:C.gold,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.12em",textTransform:"uppercase"}}>{flash||"SALVA SETTIMANA"}</button>
     </div>
   );
 }
@@ -1018,7 +1074,8 @@ function TWImportModal({onClose, onSave, existing}) {
           ) : (
             <div>
               <div style={{fontSize:14,color:C.green,fontWeight:700,marginBottom:4}}>{parsed.n+" candele caricate"}</div>
-              <div style={{fontSize:12,color:C.text,marginBottom:8}}>{parsed.first+" \u2192 "+parsed.last+" \u00B7 "+parsed.days+" giorni"}</div>
+              <div style={{fontSize:12,color:C.text,marginBottom:4}}>{parsed.first+" \u2192 "+parsed.last+" \u00B7 "+parsed.days+" giorni"}</div>
+              <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:8}}>{"Prodotto rilevato: "+detectOHLCProduct(parsed.data)}</div>
               <label style={{display:"inline-block",padding:"6px 16px",border:"1px solid "+C.border,borderRadius:4,color:C.sub,fontSize:10,fontFamily:"inherit",cursor:"pointer"}}>
                 Cambia file<input type="file" accept=".csv" onChange={handleFile} style={{display:"none"}}/>
               </label>
@@ -1182,6 +1239,8 @@ function Journal() {
   const [rv,           setRv]           = useState(R_DEFAULT);
   const [ohlcData,     setOhlcData]     = useState([]);
   const [ohlcMeta,     setOhlcMeta]     = useState(null);
+  const [ohlcNQ,       setOhlcNQ]       = useState([]);
+  const [ohlcMetaNQ,   setOhlcMetaNQ]   = useState(null);
   const [showOnlyR,    setShowOnlyR]    = useState(false);
   const [loading,      setLoading]      = useState(true);
   const [showImport,   setShowImport]   = useState(false);
@@ -1210,6 +1269,10 @@ function Journal() {
         if(st){ const s=JSON.parse(st.value); if(s.rv) setRv(s.rv); }
         if(oh){ const arr=JSON.parse(oh.value); setOhlcData(arr.map(function(c){return{time:c[0],high:c[1],low:c[2]};})); }
         if(om) setOhlcMeta(JSON.parse(om.value));
+        const onq=await storage.get("jnl:v2:ohlcNQ");
+        const omq=await storage.get("jnl:v2:ohlcMetaNQ");
+        if(onq){ const arr=JSON.parse(onq.value); setOhlcNQ(arr.map(function(c){return{time:c[0],high:c[1],low:c[2]};})); }
+        if(omq) setOhlcMetaNQ(JSON.parse(omq.value));
       }catch(e){}
       setLoading(false);
     })();
@@ -1220,12 +1283,16 @@ function Journal() {
     setShowSettings(false);
   }
   async function saveTWOhlc(data, meta){
-    setOhlcData(data); setOhlcMeta(meta);
-    try{
-      const compact=data.map(function(c){return[c.time,c.high,c.low];});
-      await storage.set("jnl:v2:ohlc",JSON.stringify(compact));
-      await storage.set("jnl:v2:ohlcmeta",JSON.stringify(meta));
-    }catch(e){}
+    const product = detectOHLCProduct(data);
+    meta.product = product;
+    const compact = data.map(function(c){return[c.time,c.high,c.low];});
+    if (product === "NQ") {
+      setOhlcNQ(data); setOhlcMetaNQ(meta);
+      try{ await storage.set("jnl:v2:ohlcNQ",JSON.stringify(compact)); await storage.set("jnl:v2:ohlcMetaNQ",JSON.stringify(meta)); }catch(e){}
+    } else {
+      setOhlcData(data); setOhlcMeta(meta);
+      try{ await storage.set("jnl:v2:ohlc",JSON.stringify(compact)); await storage.set("jnl:v2:ohlcmeta",JSON.stringify(meta)); }catch(e){}
+    }
   }
   function toggleR(){ setShowOnlyR(function(v){return !v;}); }
   const TABS = [{k:"dashboard",l:"DASHBOARD"},{k:"calendario",l:"CALENDARIO"},{k:"settimanale",l:"SETTIMANALE"}];
@@ -1248,7 +1315,8 @@ function Journal() {
           </div>
           <div style={{fontSize:10,color:C.sub,marginTop:5,letterSpacing:"0.12em"}}>
             {"ES FUTURES JOURNAL \u00B7 "+trades.length+" trade \u00B7 1R = $"+rv}
-            {ohlcMeta && <span style={{color:C.green,marginLeft:10}}>{"\u00B7 OHLC "+ohlcMeta.days+"gg"}</span>}
+            {ohlcMeta && <span style={{color:C.green,marginLeft:10}}>{"\u00B7 ES OHLC "+ohlcMeta.days+"gg"}</span>}
+            {ohlcMetaNQ && <span style={{color:C.blue,marginLeft:6}}>{"\u00B7 NQ OHLC "+ohlcMetaNQ.days+"gg"}</span>}
           </div>
         </div>
         <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:8}}>

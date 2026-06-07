@@ -36,8 +36,8 @@
 
 const C = {
   bg:"#07070A", panel:"#0F0F13", card:"#16161B", card2:"#1C1C22",
-  border:"#242430", border2:"#2E2E3A", text:"#EAE5DB", sub:"#525A6A",
-  muted:"#1E1E24", dim:"#0C0C10", green:"#1EBF6A", greenBg:"#1EBF6A1A",
+  border:"#2C2C3A", border2:"#383848", text:"#EDE8DC", sub:"#8A96B0",
+  muted:"#24242E", dim:"#10101A", green:"#1EBF6A", greenBg:"#1EBF6A1A",
   red:"#E84545", redBg:"#E845451A", gold:"#F5A020", goldBg:"#F5A0201A",
   blue:"#5A8FE8", purple:"#9878D8",
 };
@@ -355,6 +355,205 @@ function groupBy(trades, fn, rv) {
   return result;
 }
 
+
+// ─── DONUT WIN/LOSS/BE ────────────────────────────────────────────────────────
+function DonutChart({w, l, be}) {
+  const total = w + l + be;
+  if (!total) return null;
+  const R = 46, cx = 60, cy = 60, sw = 15;
+  const circ = 2 * Math.PI * R;
+  const wP = w / total, lP = l / total, bP = be / total;
+  const GAP = 0.025;
+  return (
+    <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"16px 20px",marginBottom:14}}>
+      <div style={{fontSize:10,color:C.sub,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:14}}>Win / Loss / BE</div>
+      <div style={{display:"flex",alignItems:"center",gap:28}}>
+        <svg width={120} height={120} viewBox="0 0 120 120" style={{flexShrink:0}}>
+          <circle cx={cx} cy={cy} r={R} fill="none" stroke={C.muted} strokeWidth={sw}/>
+          <g transform={"rotate(-90 "+cx+" "+cy+")"}>
+            {wP>0&&<circle cx={cx} cy={cy} r={R} fill="none" stroke={C.green} strokeWidth={sw}
+              strokeDasharray={(circ*(wP-GAP)).toFixed(2)+" "+circ} strokeLinecap="butt"/>}
+            {lP>0&&<circle cx={cx} cy={cy} r={R} fill="none" stroke={C.red} strokeWidth={sw}
+              strokeDasharray={(circ*(lP-GAP)).toFixed(2)+" "+circ} strokeLinecap="butt"
+              transform={"rotate("+(wP*360).toFixed(2)+" "+cx+" "+cy+")"}/>}
+            {bP>0.01&&<circle cx={cx} cy={cy} r={R} fill="none" stroke={C.gold} strokeWidth={sw}
+              strokeDasharray={(circ*(bP-GAP*0.5)).toFixed(2)+" "+circ} strokeLinecap="butt"
+              transform={"rotate("+((wP+lP)*360).toFixed(2)+" "+cx+" "+cy+")"}/>}
+          </g>
+          <text x={cx} y={cy-5} fill={C.text} fontSize="18" fontWeight="700" textAnchor="middle">{Math.round(wP*100)+"%"}</text>
+          <text x={cx} y={cy+11} fill={C.sub} fontSize="9" textAnchor="middle" letterSpacing="0.08em">WIN RATE</text>
+        </svg>
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          {[{label:"Win",val:w,col:C.green},{label:"Loss",val:l,col:C.red},{label:"BE",val:be,col:C.gold}].filter(function(item){return item.val>0;}).map(function(item){
+            return(
+              <div key={item.label} style={{display:"flex",alignItems:"center",gap:10}}>
+                <div style={{width:10,height:10,borderRadius:2,background:item.col,flexShrink:0}}/>
+                <span style={{fontSize:12,color:C.sub}}>{item.label}</span>
+                <span style={{fontSize:20,fontWeight:700,color:item.col,marginLeft:4}}>{item.val}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── DAILY P&L BAR CHART ──────────────────────────────────────────────────────
+function DailyPnlChart({trades, rv}) {
+  const byDate = {};
+  trades.filter(function(t){return t.result!=="Open";}).forEach(function(t){
+    if (!byDate[t.date]) byDate[t.date]=0;
+    byDate[t.date]+=(t.pnl_dollars||0);
+  });
+  const days = Object.keys(byDate).sort();
+  if (days.length < 2) return null;
+  const vals = days.map(function(d){return calcR(byDate[d],rv);});
+  const maxAbs = Math.max.apply(null, vals.map(Math.abs).concat([0.1]));
+  const W=560,H=100,PAD=24,inner=W-PAD*2;
+  const slotW = inner/days.length;
+  const bW = Math.min(28, slotW-4);
+  const midY = PAD+H/2;
+  return(
+    <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"16px 20px",marginBottom:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <span style={{fontSize:10,color:C.sub,letterSpacing:"0.14em",textTransform:"uppercase"}}>Daily P&L</span>
+        <span style={{fontSize:10,color:C.sub}}>{days.length} giorni</span>
+      </div>
+      <svg viewBox={"0 0 "+W+" "+(H+PAD)} width="100%" style={{display:"block"}}>
+        <line x1={PAD} y1={midY} x2={W-PAD} y2={midY} stroke={C.border} strokeWidth="1"/>
+        {vals.map(function(v,i){
+          const x=PAD+i*slotW+(slotW-bW)/2;
+          const barH=Math.max(2, Math.abs(v)/maxAbs*(H/2-4));
+          const y=v>=0?midY-barH:midY;
+          const col=v>=0?C.green:C.red;
+          return(
+            <g key={i}>
+              <rect x={x} y={y} width={bW} height={barH} fill={col} rx="2" opacity="0.85"/>
+              {days.length<=20&&<text x={x+bW/2} y={H+PAD+12} fill={C.sub} fontSize="7" textAnchor="middle">{days[i].slice(5)}</text>}
+            </g>
+          );
+        })}
+        <text x={PAD-4} y={PAD+8}   fill={C.sub} fontSize="8" textAnchor="end">{"+"+maxAbs.toFixed(1)+"R"}</text>
+        <text x={PAD-4} y={midY+H/2-4} fill={C.sub} fontSize="8" textAnchor="end">{"-"+maxAbs.toFixed(1)+"R"}</text>
+      </svg>
+    </div>
+  );
+}
+
+// ─── DURATION ANALYSIS ────────────────────────────────────────────────────────
+function DurationAnalysis({trades, rv}) {
+  const BUCKETS=[
+    {label:"< 2min", min:0,  max:2},
+    {label:"2–5min", min:2,  max:5},
+    {label:"5–15min",min:5,  max:15},
+    {label:"15–30min",min:15,max:30},
+    {label:"30–60min",min:30,max:60},
+    {label:"> 60min", min:60,max:Infinity},
+  ];
+  const closed=trades.filter(function(t){return t.result!=="Open"&&t.duration!=null;});
+  if (!closed.length) return null;
+  const buckets=BUCKETS.map(function(b){
+    const grp=closed.filter(function(t){return t.duration>=b.min&&t.duration<b.max;});
+    const wins=grp.filter(function(t){return t.result==="Win";}).length;
+    const totalPnl=grp.reduce(function(s,t){return s+(t.pnl_dollars||0);},0);
+    return {label:b.label,n:grp.length,wr:grp.length?wins/grp.length*100:null,r:calcR(totalPnl,rv)};
+  }).filter(function(b){return b.n>0;});
+  if (!buckets.length) return null;
+  const maxR=Math.max.apply(null,buckets.map(function(b){return Math.abs(b.r);}).concat([0.1]));
+  return(
+    <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"16px 20px",marginBottom:14}}>
+      <div style={{fontSize:10,color:C.sub,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:14}}>Duration Analysis</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
+        <div>
+          <div style={{fontSize:10,color:C.sub,marginBottom:10,fontWeight:600}}>Win Rate per durata</div>
+          {buckets.map(function(b,i){
+            return(
+              <div key={i} style={{marginBottom:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                  <span style={{fontSize:11,color:C.gold}}>{b.label}</span>
+                  <span style={{fontSize:11,fontWeight:600,color:b.wr>=50?C.green:C.red}}>{b.wr!==null?b.wr.toFixed(0)+"%":"—"}<span style={{fontSize:9,color:C.sub,marginLeft:4}}>({b.n}t)</span></span>
+                </div>
+                <div style={{height:5,background:C.muted,borderRadius:3}}>
+                  {b.wr!==null&&<div style={{width:b.wr+"%",height:"100%",background:b.wr>=50?C.green:C.red,borderRadius:3}}/>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div>
+          <div style={{fontSize:10,color:C.sub,marginBottom:10,fontWeight:600}}>P&L per durata</div>
+          {buckets.map(function(b,i){
+            const w=Math.abs(b.r)/maxR*100;
+            return(
+              <div key={i} style={{marginBottom:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                  <span style={{fontSize:11,color:C.gold}}>{b.label}</span>
+                  <span style={{fontSize:11,fontWeight:600,color:b.r>=0?C.green:C.red}}>{fmtR(b.r)}</span>
+                </div>
+                <div style={{height:5,background:C.muted,borderRadius:3}}>
+                  <div style={{width:w+"%",height:"100%",background:b.r>=0?C.green:C.red,borderRadius:3}}/>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── DAY TRADE LIST ───────────────────────────────────────────────────────────
+function DayTradeList({trades, rv, date}) {
+  if (!trades||!trades.length) return null;
+  const closed=trades.filter(function(t){return t.result!=="Open";});
+  if (!closed.length) return null;
+  const totalPnl=closed.reduce(function(s,t){return s+(t.pnl_dollars||0);},0);
+  const totalR=calcR(totalPnl,rv);
+  const totCol=totalR>=0?C.green:C.red;
+  const FASCIA_COL={"Gold Zone":C.gold,"Silver Zone":"#A8B8CC","Dead Zone":"#4A5060","Mid AM":C.blue,"Lunch":C.purple,"PM Post Lunch":"#E87830","PM Session":"#D055A0","Power Hour":C.green,"Altro":"#374050"};
+  return(
+    <div style={{background:C.panel,border:"1px solid "+C.gold+"50",borderRadius:10,padding:"16px 20px",marginTop:10}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,paddingBottom:10,borderBottom:"0.5px solid "+C.border}}>
+        <span style={{fontSize:11,color:C.gold,fontWeight:700,letterSpacing:"0.1em"}}>TRADE DEL {date}</span>
+        <div style={{display:"flex",gap:16,alignItems:"center"}}>
+          <span style={{fontSize:12,color:C.sub}}>{closed.length} trade</span>
+          <span style={{fontSize:16,fontWeight:700,color:totCol}}>{fmtR(totalR)}</span>
+          <span style={{fontSize:11,color:totCol,opacity:0.8}}>{fmtD(totalPnl)}</span>
+        </div>
+      </div>
+      {closed.map(function(t,i){
+        const r=calcR(t.pnl_dollars||0,rv);
+        const rCol=t.result==="Win"?C.green:t.result==="Loss"?C.red:C.gold;
+        const fascia=getFascia(t.entry_time||"");
+        const fasciaCol=FASCIA_COL[fascia]||"#374050";
+        return(
+          <div key={t.id||i} style={{display:"grid",gridTemplateColumns:"auto 1fr auto auto auto",gap:12,alignItems:"center",padding:"8px 0",borderTop:i>0?"0.5px solid "+C.muted:"none"}}>
+            <div style={{fontSize:9,padding:"3px 8px",background:fasciaCol+"25",border:"1px solid "+fasciaCol+"60",borderRadius:4,color:fasciaCol,whiteSpace:"nowrap"}}>{fascia}</div>
+            <div>
+              <div style={{fontSize:11,color:t.direction==="Buy"?C.green:C.red,fontWeight:600}}>{t.direction==="Buy"?"▲ BUY":"▼ SELL"} <span style={{color:C.sub,fontWeight:400}}>{t.product||"ES"}</span></div>
+              <div style={{fontSize:9,color:C.sub}}>{t.entry_time} → {t.exit_time||"—"} <span style={{marginLeft:4}}>{fmtDur(t.duration)}</span></div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontSize:9,color:C.sub}}>Entry</div>
+              <div style={{fontSize:11,color:C.text}}>{t.entry_price||"—"}</div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontSize:9,color:C.sub}}>Exit</div>
+              <div style={{fontSize:11,color:C.text}}>{t.exit_price||"—"}</div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontSize:14,fontWeight:700,color:rCol}}>{fmtR(r)}</div>
+              <div style={{fontSize:10,color:rCol,opacity:0.8}}>{fmtD(t.pnl_dollars||0)}</div>
+              {t.partial&&<div style={{fontSize:8,color:C.purple,marginTop:2}}>PARTIAL</div>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── EQUITY CURVE ─────────────────────────────────────────────────────────────
 function EquityCurve({trades, rv}) {
   const closed = [...trades].filter(function(t){return t.result!=="Open";}).reverse();
@@ -450,7 +649,7 @@ function BTable({title, rows}) {
 }
 
 // ─── DAY CELL ─────────────────────────────────────────────────────────────────
-function DayCell({info, stats, rv, today, showOnlyR}) {
+function DayCell({info, stats, rv, today, showOnlyR, onSelect, isSelected}) {
   const r       = stats ? calcR(stats.totalPnl, rv) : null;
   const isColored = stats && r !== null && Math.abs(r) >= 0.01;
   const bg      = isColored ? dayBg(r) : "transparent";
@@ -461,7 +660,7 @@ function DayCell({info, stats, rv, today, showOnlyR}) {
   const subCol  = !inM ? C.muted  : isColored ? "rgba(255,255,255,0.80)" : C.muted;
   const bdr     = isToday ? C.gold+"90" : (isColored && inM ? "transparent" : C.border);
   return (
-    <div style={{background:inM?(isColored?bg:C.card):C.dim,border:"1px solid "+bdr,borderRadius:6,padding:"8px 10px",minHeight:72,opacity:inM?1:0.3}}>
+    <div onClick={function(){if(inM&&stats)onSelect(info.dateStr);}} style={{background:inM?(isColored?bg:C.card):C.dim,border:"1px solid "+(isSelected?"#F5A020":bdr),borderRadius:6,padding:"8px 10px",minHeight:72,opacity:inM?1:0.3,cursor:inM&&stats?"pointer":"default"}}>
       <div style={{fontSize:11,color:numCol,fontWeight:isToday?700:400,marginBottom:4}}>{info.day}</div>
       {stats && inM && (
         <div>
@@ -505,6 +704,7 @@ function CalendarioView({trades, rv, onImport, onExport, onTWImport, ohlcMeta, s
   const now = new Date();
   const [year,  setYear]  = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth());
+  const [selectedDate, setSelectedDate] = useState(null);
   const today = now.toISOString().slice(0, 10);
   const byDate = {};
   trades.forEach(function(t){ if (!byDate[t.date]) byDate[t.date]=[]; byDate[t.date].push(t); });
@@ -577,12 +777,15 @@ function CalendarioView({trades, rv, onImport, onExport, onTWImport, ohlcMeta, s
           }
           return (
             <div key={wi} style={{display:"grid",gridTemplateColumns:"repeat(5,1fr) 80px",gap:6,marginBottom:6}}>
-              {week.map(function(info, di){ return <DayCell key={di} info={info} stats={dayStats(info.dateStr)} rv={rv} today={today} showOnlyR={showOnlyR}/>; })}
+              {week.map(function(info, di){ return <DayCell key={di} info={info} stats={dayStats(info.dateStr)} rv={rv} today={today} showOnlyR={showOnlyR} onSelect={function(d){setSelectedDate(selectedDate===d?null:d);}} isSelected={selectedDate===info.dateStr}/>; })}
               <WeekCell weekTrades={wkTrades} rv={rv} showOnlyR={showOnlyR}/>
             </div>
           );
         })}
       </div>
+      {selectedDate && (
+        <DayTradeList trades={byDate[selectedDate]||[]} rv={rv} date={selectedDate}/>
+      )}
     </div>
   );
 }
@@ -622,6 +825,10 @@ function Dashboard({trades, rv, ohlcData}) {
         <MetricCard label="W / L / BE"      value={m.w+" / "+m.l+" / "+m.be} color={C.sub}/>
       </div>
       <EquityCurve trades={trades} rv={rv}/>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+        <DonutChart w={m.w} l={m.l} be={m.be}/>
+        <DailyPnlChart trades={trades} rv={rv}/>
+      </div>
       {mmStats ? (
         <div style={{background:C.card,border:"1px solid "+C.blue+"40",borderRadius:10,padding:"16px 20px",marginBottom:14}}>
           <div style={{fontSize:10,color:C.blue,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:12}}>{"MAE / MFE \u00B7 "+mmStats.n+" trade con OHLC \u00B7 M5"}</div>
@@ -667,6 +874,7 @@ function Dashboard({trades, rv, ohlcData}) {
           );
         })}
       </div>
+      <DurationAnalysis trades={trades} rv={rv}/>
       <BTable title="Performance per giorno della settimana" rows={DAYS_IT.map(function(d){ return {label:d,m:byDow[d]||null,col:C.gold}; })}/>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         <BTable title="Performance per session" rows={[

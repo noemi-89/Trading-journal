@@ -1066,6 +1066,7 @@ function Dashboard({trades, rv, ohlcData, ohlcNQ}) {
   const bySess   = groupBy(trades, function(t){ return getSession(t.entry_time||""); }, rv);
   const byDir    = groupBy(trades, function(t){ return t.direction||"Buy"; }, rv);
   const byPart   = groupBy(trades, function(t){ return t.partial?"Partial":"Full Hold"; }, rv);
+  const byAsset  = groupBy(trades, function(t){ return productFamily(t); }, rv);
   const rfC  = m.rf>=3?C.green:m.rf>=1.5?C.gold:C.red;
   const evC  = m.ev>=0?C.green:C.red;
   const totC = m.totalR>=0?C.green:C.red;
@@ -1142,6 +1143,10 @@ function Dashboard({trades, rv, ohlcData, ohlcNQ}) {
       </div>
       <DurationAnalysis trades={trades} rv={rv}/>
       <BTable title="Performance per giorno della settimana" rows={DAYS_IT.map(function(d){ return {label:d,m:byDow[d]||null,col:C.gold}; })}/>
+      <BTable title="Performance asset" rows={[
+        {label:"NQ / MNQ",m:byAsset["NQ"]||null,col:C.blue},
+        {label:"ES / MES",m:byAsset["ES"]||null,col:C.gold},
+      ]}/>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         <BTable title="Performance per session" rows={[
           {label:"Pre Market",m:bySess["Pre Market"]||null,col:C.sub},

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Hello Noemi Â· Trading Journal</title>
+  <title>Hello Noemi - Trading Journal</title>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone@7.23.2/babel.min.js"></script>
@@ -20,7 +20,7 @@
   <script type="text/babel">
     const { useState, useEffect } = React;
 
-    // localStorage shim â€” persistent browser storage
+    // localStorage shim - persistent browser storage
     const storage = {
       get: async function(key) {
         try { const v = localStorage.getItem(key); return v ? { value: v } : null; } catch(e) { return null; }
@@ -78,7 +78,7 @@ const SEED = [
   { id:"s16",date:"2026-05-06",entry_time:"10:05",exit_time:"10:35",duration:30, direction:"Sell",entry_price:7505,  exit_price:7513.5, pnl_dollars:-425, result:"Loss",notes:"",partial:false,product:"ES" },
 ];
 
-// â”€â”€â”€ HELPERS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// HELPERS
 function getFascia(t) {
   if (!t) return "Altro";
   const parts = t.split(":"); const h = Number(parts[0]); const m = Number(parts[1]);
@@ -103,9 +103,9 @@ function getSession(t) {
   return "Power Hour";
 }
 function calcR(pnl, rv)  { return pnl / rv; }
-function fmtR(r)         { if (r == null || isNaN(r)) return "\u2014"; return (r >= 0 ? "+" : "") + r.toFixed(2) + "R"; }
-function fmtD(d)         { if (d == null || isNaN(d)) return "\u2014"; return (d >= 0 ? "+" : "-") + "$" + Math.abs(Math.round(d)).toLocaleString("en-US"); }
-function fmtDur(m)       { if (m == null) return "\u2014"; if (m < 60) return Math.round(m) + "m"; return Math.floor(m / 60) + "h " + Math.round(m % 60) + "m"; }
+function fmtR(r)         { if (r == null || isNaN(r)) return "-"; return (r >= 0 ? "+" : "") + r.toFixed(2) + "R"; }
+function fmtD(d)         { if (d == null || isNaN(d)) return "-"; return (d >= 0 ? "+" : "-") + "$" + Math.abs(Math.round(d)).toLocaleString("en-US"); }
+function fmtDur(m)       { if (m == null) return "-"; if (m < 60) return Math.round(m) + "m"; return Math.floor(m / 60) + "h " + Math.round(m % 60) + "m"; }
 function getDow(ds)      { if (!ds) return "?"; return DOW_IT[new Date(ds + "T12:00:00").getDay()] || "?"; }
 function dayBg(r) {
   if (r == null || isNaN(r) || Math.abs(r) < 0.01) return "transparent";
@@ -137,7 +137,7 @@ function getCalendarWeeks(year, month) {
   return weeks.filter(function(w) { return w.some(function(d) { return d.inMonth; }); });
 }
 
-// â”€â”€â”€ TRADOVATE PARSER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// TRADOVATE PARSER
 function parseCSVLine(line) {
   const result = [];
   let current = "";
@@ -254,14 +254,14 @@ function parseTradovateCSV(text) {
 }
 
 
-// â”€â”€â”€ DETECT OHLC PRODUCT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// DETECT OHLC PRODUCT
 function detectOHLCProduct(data) {
   if (!data || !data.length) return "ES";
   const mid = (data[0].high + data[0].low) / 2;
   return mid > 15000 ? "NQ" : "ES";
 }
 
-// â”€â”€â”€ MAE / MFE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// MAE / MFE
 function parseTWCsv(text) {
   const lines = text.trim().split("\n").filter(function(l) { return l.trim(); });
   if (lines.length < 2) return [];
@@ -323,7 +323,7 @@ function calcMaeMfeStats(trades, ohlcES, ohlcNQ) {
   return { avgMae: sumMae / n, avgMfe: sumMfe / n, avgEff: cntEff ? sumEff / cntEff : 0, n: n };
 }
 
-// â”€â”€â”€ STATS ENGINE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// STATS ENGINE
 function calcStats(trades, rv) {
   const closed = trades.filter(function(t) { return t.result !== "Open"; });
   if (!closed.length) return null;
@@ -366,7 +366,7 @@ function groupBy(trades, fn, rv) {
 }
 
 
-// â”€â”€â”€ DONUT WIN/LOSS/BE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// DONUT WIN/LOSS/BE
 function DonutChart({w, l, be}) {
   const total = w + l + be;
   if (!total) return null;
@@ -409,7 +409,7 @@ function DonutChart({w, l, be}) {
   );
 }
 
-// â”€â”€â”€ DAILY P&L BAR CHART â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// DAILY P&L BAR CHART
 function DailyPnlChart({trades, rv}) {
   const byDate = {};
   trades.filter(function(t){return t.result!=="Open";}).forEach(function(t){
@@ -451,14 +451,14 @@ function DailyPnlChart({trades, rv}) {
   );
 }
 
-// â”€â”€â”€ DURATION ANALYSIS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// DURATION ANALYSIS
 function DurationAnalysis({trades, rv}) {
   const BUCKETS=[
     {label:"< 2min", min:0,  max:2},
-    {label:"2â€“5min", min:2,  max:5},
-    {label:"5â€“15min",min:5,  max:15},
-    {label:"15â€“30min",min:15,max:30},
-    {label:"30â€“60min",min:30,max:60},
+    {label:"2-5min", min:2,  max:5},
+    {label:"5-15min",min:5,  max:15},
+    {label:"15-30min",min:15,max:30},
+    {label:"30-60min",min:30,max:60},
     {label:"> 60min", min:60,max:Infinity},
   ];
   const closed=trades.filter(function(t){return t.result!=="Open"&&t.duration!=null;});
@@ -473,16 +473,16 @@ function DurationAnalysis({trades, rv}) {
   const maxR=Math.max.apply(null,buckets.map(function(b){return Math.abs(b.r);}).concat([0.1]));
   return(
     <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"16px 20px",marginBottom:14}}>
-      <div style={{fontSize:10,color:C.sub,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:14}}>Duration Analysis</div>
+      <div style={{fontSize:13,color:C.text,letterSpacing:"0.11em",textTransform:"uppercase",marginBottom:14,fontWeight:700}}>Duration Analysis</div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
         <div>
-          <div style={{fontSize:10,color:C.sub,marginBottom:10,fontWeight:600}}>Win Rate per durata</div>
+          <div style={{fontSize:12,color:C.gold,marginBottom:10,fontWeight:700}}>Win Rate per durata</div>
           {buckets.map(function(b,i){
             return(
               <div key={i} style={{marginBottom:10}}>
                 <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
                   <span style={{fontSize:11,color:C.gold}}>{b.label}</span>
-                  <span style={{fontSize:11,fontWeight:600,color:b.wr>=50?C.green:C.red}}>{b.wr!==null?b.wr.toFixed(0)+"%":"â€”"}<span style={{fontSize:9,color:C.sub,marginLeft:4}}>({b.n}t)</span></span>
+                  <span style={{fontSize:11,fontWeight:600,color:b.wr>=50?C.green:C.red}}>{b.wr!==null?b.wr.toFixed(0)+"%":"-"}<span style={{fontSize:9,color:C.sub,marginLeft:4}}>({b.n}t)</span></span>
                 </div>
                 <div style={{height:5,background:C.muted,borderRadius:3}}>
                   {b.wr!==null&&<div style={{width:b.wr+"%",height:"100%",background:b.wr>=50?C.green:C.red,borderRadius:3}}/>}
@@ -492,7 +492,7 @@ function DurationAnalysis({trades, rv}) {
           })}
         </div>
         <div>
-          <div style={{fontSize:10,color:C.sub,marginBottom:10,fontWeight:600}}>P&L per durata</div>
+          <div style={{fontSize:12,color:C.gold,marginBottom:10,fontWeight:700}}>P&L per durata</div>
           {buckets.map(function(b,i){
             const w=Math.abs(b.r)/maxR*100;
             return(
@@ -513,7 +513,7 @@ function DurationAnalysis({trades, rv}) {
   );
 }
 
-// â”€â”€â”€ DAY TRADE LIST â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// DAY TRADE LIST
 function DayTradeList({trades, rv, date}) {
   if (!trades||!trades.length) return null;
   const closed=trades.filter(function(t){return t.result!=="Open";});
@@ -541,16 +541,16 @@ function DayTradeList({trades, rv, date}) {
           <div key={t.id||i} style={{display:"grid",gridTemplateColumns:"auto 1fr auto auto auto",gap:12,alignItems:"center",padding:"8px 0",borderTop:i>0?"0.5px solid "+C.muted:"none"}}>
             <div style={{fontSize:9,padding:"3px 8px",background:fasciaCol+"25",border:"1px solid "+fasciaCol+"60",borderRadius:4,color:fasciaCol,whiteSpace:"nowrap"}}>{fascia}</div>
             <div>
-              <div style={{fontSize:11,color:t.direction==="Buy"?C.green:C.red,fontWeight:600}}>{t.direction==="Buy"?"â–² BUY":"â–¼ SELL"} <span style={{color:C.sub,fontWeight:400}}>{t.product||"ES"}</span></div>
-              <div style={{fontSize:9,color:C.sub}}>{t.entry_time} â†’ {t.exit_time||"â€”"} <span style={{marginLeft:4}}>{fmtDur(t.duration)}</span></div>
+              <div style={{fontSize:11,color:t.direction==="Buy"?C.green:C.red,fontWeight:600}}>{t.direction==="Buy"?"BUY":"SELL"} <span style={{color:C.sub,fontWeight:400}}>{t.product||"ES"}</span></div>
+              <div style={{fontSize:9,color:C.sub}}>{t.entry_time} -> {t.exit_time||"-"} <span style={{marginLeft:4}}>{fmtDur(t.duration)}</span></div>
             </div>
             <div style={{textAlign:"right"}}>
               <div style={{fontSize:9,color:C.sub}}>Entry</div>
-              <div style={{fontSize:11,color:C.text}}>{t.entry_price||"â€”"}</div>
+              <div style={{fontSize:11,color:C.text}}>{t.entry_price||"-"}</div>
             </div>
             <div style={{textAlign:"right"}}>
               <div style={{fontSize:9,color:C.sub}}>Exit</div>
-              <div style={{fontSize:11,color:C.text}}>{t.exit_price||"â€”"}</div>
+              <div style={{fontSize:11,color:C.text}}>{t.exit_price||"-"}</div>
             </div>
             <div style={{textAlign:"right"}}>
               <div style={{fontSize:14,fontWeight:700,color:rCol}}>{fmtR(r)}</div>
@@ -564,7 +564,7 @@ function DayTradeList({trades, rv, date}) {
   );
 }
 
-// â”€â”€â”€ EQUITY CURVE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// EQUITY CURVE
 function EquityCurve({trades, rv}) {
   const closed = [...trades].filter(function(t){return t.result!=="Open";}).reverse();
   if (closed.length < 2) return null;
@@ -582,7 +582,7 @@ function EquityCurve({trades, rv}) {
   return (
     <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"16px 20px",marginBottom:14}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-        <span style={{fontSize:10,color:C.sub,letterSpacing:"0.14em",textTransform:"uppercase"}}>{"Equity Curve \u00B7 1R = $"+rv}</span>
+        <span style={{fontSize:12,color:C.text,letterSpacing:"0.11em",textTransform:"uppercase",fontWeight:700}}>{"Equity Curve - 1R = $"+rv}</span>
         <div style={{display:"flex",gap:24}}>
           <div style={{textAlign:"right"}}>
             <div style={{fontSize:9,color:C.sub,marginBottom:2}}>Total R</div>
@@ -610,7 +610,7 @@ function EquityCurve({trades, rv}) {
   );
 }
 
-// â”€â”€â”€ METRIC CARD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// METRIC CARD
 function MetricCard({label, value, sub, color}) {
   return (
     <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:8,padding:"14px 16px"}}>
@@ -621,12 +621,12 @@ function MetricCard({label, value, sub, color}) {
   );
 }
 
-// â”€â”€â”€ BREAKDOWN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// BREAKDOWN
 function BRow({label, m, col}) {
   if (!m) return (
     <tr style={{borderTop:"0.5px solid "+C.border}}>
       <td style={{padding:"8px 8px 8px 0",fontSize:11,color:col||C.gold}}>{label}</td>
-      <td colSpan={4} style={{textAlign:"center",fontSize:10,color:C.sub}}>{"\u2014"}</td>
+      <td colSpan={4} style={{textAlign:"center",fontSize:10,color:C.sub}}>{"-"}</td>
     </tr>
   );
   return (
@@ -642,7 +642,7 @@ function BRow({label, m, col}) {
 function BTable({title, rows}) {
   return (
     <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"14px 18px",marginBottom:12}}>
-      <div style={{fontSize:10,color:C.sub,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:10}}>{title}</div>
+      <div style={{fontSize:13,color:C.text,letterSpacing:"0.11em",textTransform:"uppercase",marginBottom:12,fontWeight:700}}>{title}</div>
       <table style={{width:"100%",borderCollapse:"collapse"}}>
         <thead>
           <tr>
@@ -658,7 +658,7 @@ function BTable({title, rows}) {
   );
 }
 
-// â”€â”€â”€ DAY CELL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// DAY CELL
 function DayCell({info, stats, rv, today, showOnlyR, onSelect, isSelected}) {
   const r       = stats ? calcR(stats.totalPnl, rv) : null;
   const isColored = stats && r !== null && Math.abs(r) >= 0.01;
@@ -676,18 +676,18 @@ function DayCell({info, stats, rv, today, showOnlyR, onSelect, isSelected}) {
         <div>
           <div style={{fontSize:16,fontWeight:700,color:mainCol,lineHeight:1,marginBottom:3}}>{fmtR(r)}</div>
           {!showOnlyR && <div style={{fontSize:10,color:subCol,marginBottom:3}}>{fmtD(stats.totalPnl)}</div>}
-          <div style={{fontSize:9,color:subCol}}>{stats.n+"t \u00B7 "+stats.wr.toFixed(0)+"%W"}</div>
+          <div style={{fontSize:9,color:subCol}}>{stats.n+"t - "+stats.wr.toFixed(0)+"%W"}</div>
         </div>
       )}
     </div>
   );
 }
 
-// â”€â”€â”€ WEEK CELL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// WEEK CELL
 function WeekCell({weekTrades, rv, showOnlyR}) {
   if (!weekTrades || !weekTrades.length) return (
     <div style={{background:C.dim,border:"1px solid "+C.border,borderRadius:6,padding:"8px 10px",minHeight:72,display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <span style={{fontSize:9,color:C.muted}}>{"\u2014"}</span>
+      <span style={{fontSize:9,color:C.muted}}>{"-"}</span>
     </div>
   );
   const closed   = weekTrades.filter(function(t){ return t.result !== "Open"; });
@@ -704,12 +704,12 @@ function WeekCell({weekTrades, rv, showOnlyR}) {
       <div style={{fontSize:9,color:isColored?"rgba(255,255,255,0.65)":C.sub,marginBottom:4,letterSpacing:"0.08em",fontWeight:600}}>WEEK</div>
       <div style={{fontSize:14,fontWeight:700,color:mainCol,lineHeight:1,marginBottom:2}}>{fmtR(r)}</div>
       {!showOnlyR && <div style={{fontSize:10,color:subCol,marginBottom:2}}>{fmtD(totalPnl)}</div>}
-      <div style={{fontSize:9,color:subCol}}>{closed.length+"t \u00B7 "+wr.toFixed(0)+"%W"}</div>
+      <div style={{fontSize:9,color:subCol}}>{closed.length+"t - "+wr.toFixed(0)+"%W"}</div>
     </div>
   );
 }
 
-// â”€â”€â”€ CALENDARIO VIEW â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// CALENDARIO VIEW
 function CalendarioView({trades, rv, onImport, onExport, onTWImport, ohlcMeta, showOnlyR, onToggleR}) {
   const now = new Date();
   const [year,  setYear]  = useState(now.getFullYear());
@@ -742,18 +742,18 @@ function CalendarioView({trades, rv, onImport, onExport, onTWImport, ohlcMeta, s
       <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"18px 20px",marginBottom:14}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:ms?16:0}}>
           <div style={{display:"flex",alignItems:"center",gap:14}}>
-            <button onClick={prevM} style={{background:"transparent",border:"1px solid "+C.border,borderRadius:4,color:C.sub,fontSize:15,padding:"4px 12px",cursor:"pointer",fontFamily:"inherit"}}>{"\u2039"}</button>
+            <button onClick={prevM} style={{background:"transparent",border:"1px solid "+C.border,borderRadius:4,color:C.sub,fontSize:15,padding:"4px 12px",cursor:"pointer",fontFamily:"inherit"}}>{"<"}</button>
             <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:24,fontWeight:700,color:C.text,letterSpacing:"0.08em"}}>{MONTHS_IT[month].toUpperCase()+" "+year}</span>
-            <button onClick={nextM} style={{background:"transparent",border:"1px solid "+C.border,borderRadius:4,color:C.sub,fontSize:15,padding:"4px 12px",cursor:"pointer",fontFamily:"inherit"}}>{"\u203A"}</button>
+            <button onClick={nextM} style={{background:"transparent",border:"1px solid "+C.border,borderRadius:4,color:C.sub,fontSize:15,padding:"4px 12px",cursor:"pointer",fontFamily:"inherit"}}>{">"}</button>
           </div>
           <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
             <button onClick={onToggleR} style={{padding:"6px 12px",background:showOnlyR?C.gold+"20":"transparent",border:"1px solid "+(showOnlyR?C.gold:C.border),borderRadius:20,color:showOnlyR?C.gold:C.sub,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.1em",fontWeight:showOnlyR?700:400}}>
-              {showOnlyR?"R":"R \u00B7 $"}
+              {showOnlyR?"R":"R / $"}
             </button>
             {ohlcMeta && <span style={{fontSize:10,color:C.green,border:"1px solid "+C.green+"30",borderRadius:4,padding:"3px 8px"}}>{"OHLC "+ohlcMeta.days+"gg"}</span>}
-            <button onClick={onTWImport} style={{padding:"7px 14px",background:"transparent",border:"1px solid "+C.blue+"50",borderRadius:4,color:C.blue,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.1em",textTransform:"uppercase"}}>{"TW \u2191"}</button>
-            <button onClick={onImport}   style={{padding:"7px 14px",background:"transparent",border:"1px solid "+C.border,borderRadius:4,color:C.sub,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.1em",textTransform:"uppercase"}}>{"IMPORT \u2191"}</button>
-            <button onClick={onExport}   style={{padding:"7px 14px",background:"transparent",border:"1px solid "+C.gold+"50",borderRadius:4,color:C.gold,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.1em",textTransform:"uppercase"}}>{"EXPORT \u2193"}</button>
+            <button onClick={onTWImport} style={{padding:"7px 14px",background:"transparent",border:"1px solid "+C.blue+"50",borderRadius:4,color:C.blue,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.1em",textTransform:"uppercase"}}>{"TW IMPORT"}</button>
+            <button onClick={onImport}   style={{padding:"7px 14px",background:"transparent",border:"1px solid "+C.border,borderRadius:4,color:C.sub,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.1em",textTransform:"uppercase"}}>{"IMPORT"}</button>
+            <button onClick={onExport}   style={{padding:"7px 14px",background:"transparent",border:"1px solid "+C.gold+"50",borderRadius:4,color:C.gold,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.1em",textTransform:"uppercase"}}>{"EXPORT"}</button>
           </div>
         </div>
         {ms && (
@@ -800,7 +800,7 @@ function CalendarioView({trades, rv, onImport, onExport, onTWImport, ohlcMeta, s
   );
 }
 
-// â”€â”€â”€ DASHBOARD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// DASHBOARD
 function Dashboard({trades, rv, ohlcData, ohlcNQ}) {
   const m = calcStats(trades, rv);
   const mmStats = calcMaeMfeStats(trades, ohlcData, ohlcNQ);
@@ -841,7 +841,7 @@ function Dashboard({trades, rv, ohlcData, ohlcNQ}) {
       </div>
       {mmStats ? (
         <div style={{background:C.card,border:"1px solid "+C.blue+"40",borderRadius:10,padding:"16px 20px",marginBottom:14}}>
-          <div style={{fontSize:10,color:C.blue,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:12}}>{"MAE / MFE \u00B7 "+mmStats.n+" trade con OHLC \u00B7 M5"}</div>
+          <div style={{fontSize:13,color:C.blue,letterSpacing:"0.11em",textTransform:"uppercase",marginBottom:12,fontWeight:700}}>{"MAE / MFE - "+mmStats.n+" trade con OHLC - M5"}</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
             <div style={{background:C.panel,borderRadius:8,padding:"14px 16px",border:"1px solid "+C.red+"30"}}>
               <div style={{fontSize:9,color:C.sub,letterSpacing:"0.13em",textTransform:"uppercase",marginBottom:7}}>Avg MAE</div>
@@ -867,7 +867,7 @@ function Dashboard({trades, rv, ohlcData, ohlcNQ}) {
         </div>
       )}
       <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"16px 20px",marginBottom:12}}>
-        <div style={{fontSize:10,color:C.sub,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:14}}>Expectancy per fascia oraria</div>
+        <div style={{fontSize:13,color:C.text,letterSpacing:"0.11em",textTransform:"uppercase",marginBottom:14,fontWeight:700}}>Expectancy per fascia oraria</div>
         {FASCIA_LIST.map(function(item){
           const fm = byFascia[item.key]; if (!fm) return null;
           const pct = Math.min(Math.max(fm.ev*20+50,2),98);
@@ -875,7 +875,7 @@ function Dashboard({trades, rv, ohlcData, ohlcNQ}) {
             <div key={item.key} style={{marginBottom:10}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
                 <span style={{fontSize:11,color:item.col,fontWeight:500}}>{item.key}</span>
-                <span style={{fontSize:11,color:fm.ev>=0?C.green:C.red}}>{"EV "+(fm.ev>=0?"+":"")+fm.ev.toFixed(2)+"R \u00B7 WR "+fm.wr.toFixed(0)+"% \u00B7 "+fm.n+"t"}</span>
+                <span style={{fontSize:11,color:fm.ev>=0?C.green:C.red}}>{"EV "+(fm.ev>=0?"+":"")+fm.ev.toFixed(2)+"R - WR "+fm.wr.toFixed(0)+"% - "+fm.n+"t"}</span>
               </div>
               <div style={{height:3,background:C.muted,borderRadius:2}}>
                 <div style={{width:pct+"%",height:"100%",background:item.col,borderRadius:2}}/>
@@ -906,7 +906,7 @@ function Dashboard({trades, rv, ohlcData, ohlcNQ}) {
   );
 }
 
-// â”€â”€â”€ SETTIMANALE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// SETTIMANALE
 function SettimanaleView() {
   function getW(){const d=new Date(),y=d.getFullYear(),wn=Math.ceil(((d-new Date(y,0,1))/86400000+new Date(y,0,1).getDay()+1)/7);return y+"-W"+String(wn).padStart(2,"0");}
   const [week,  setWeek]  = useState(getW());
@@ -921,7 +921,7 @@ function SettimanaleView() {
   },[week]);
 
   async function save(){
-    try{ await storage.set("jnl:v2:week:"+week,JSON.stringify(data)); setFlash("Salvato \u2713"); setTimeout(function(){setFlash("");},2000); }
+    try{ await storage.set("jnl:v2:week:"+week,JSON.stringify(data)); setFlash("Salvato OK"); setTimeout(function(){setFlash("");},2000); }
     catch(e){}
   }
 
@@ -987,7 +987,7 @@ function SettimanaleView() {
                         {field.text?(
                           <input type="text" value={val}
                             onChange={function(e){const k=field.key+"_"+d;setData(function(prev){const next={};Object.keys(prev).forEach(function(k){next[k]=prev[k];});next[k]=e.target.value;return next;});}}
-                            onBlur={save} style={cinp} placeholder="â€”"/>
+                            onBlur={save} style={cinp} placeholder="-"/>
                         ):(
                           <div style={{display:"flex",flexWrap:"wrap",justifyContent:"center",gap:2}}>
                             {field.opts.map(function(opt){
@@ -1023,7 +1023,7 @@ function SettimanaleView() {
   );
 }
 
-// â”€â”€â”€ TW IMPORT MODAL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// TW IMPORT MODAL
 function TWImportModal({onClose, onSave, existing}) {
   const [parsed,  setParsed]  = useState(null);
   const [error,   setError]   = useState("");
@@ -1056,16 +1056,16 @@ function TWImportModal({onClose, onSave, existing}) {
       <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:12,padding:24,width:"100%",maxWidth:520}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
           <div>
-            <div style={{fontSize:13,color:C.text,fontWeight:600,letterSpacing:"0.08em"}}>IMPORT OHLC â€” TRADINGVIEW</div>
-            <div style={{fontSize:10,color:C.sub,marginTop:3}}>Toolbar TW in alto â†’ Export chart data â†’ ES M5 â†’ Export</div>
+            <div style={{fontSize:13,color:C.text,fontWeight:600,letterSpacing:"0.08em"}}>IMPORT OHLC - TRADINGVIEW</div>
+            <div style={{fontSize:10,color:C.sub,marginTop:3}}>Toolbar TW in alto -> Export chart data -> ES M5 -> Export</div>
           </div>
-          <button onClick={onClose} style={{background:"transparent",border:"none",color:C.sub,fontSize:22,cursor:"pointer",lineHeight:1}}>{"\u00D7"}</button>
+          <button onClick={onClose} style={{background:"transparent",border:"none",color:C.sub,fontSize:22,cursor:"pointer",lineHeight:1}}>{"X"}</button>
         </div>
-        {existing && <div style={{marginBottom:12,padding:"8px 12px",background:C.green+"10",border:"1px solid "+C.green+"30",borderRadius:6}}><div style={{fontSize:10,color:C.green}}>{"Attuale: "+existing.first+" \u2192 "+existing.last+" \u00B7 "+existing.n+" candele"}</div></div>}
+        {existing && <div style={{marginBottom:12,padding:"8px 12px",background:C.green+"10",border:"1px solid "+C.green+"30",borderRadius:6}}><div style={{fontSize:10,color:C.green}}>{"Attuale: "+existing.first+" -> "+existing.last+" - "+existing.n+" candele"}</div></div>}
         <div style={{border:"2px dashed "+C.border,borderRadius:8,padding:"28px 20px",textAlign:"center",marginBottom:14}}>
           {!parsed ? (
             <div>
-              <div style={{fontSize:28,marginBottom:10,opacity:0.25}}>{"\uD83D\uDCCA"}</div>
+              <div style={{fontSize:20,marginBottom:10,opacity:0.45}}>CSV</div>
               <div style={{fontSize:13,color:C.sub,marginBottom:16}}>Seleziona il CSV esportato da TradingView</div>
               <label style={{display:"inline-block",padding:"9px 22px",border:"1px solid "+C.blue,borderRadius:4,color:C.blue,fontSize:12,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.1em"}}>
                 SELEZIONA FILE CSV
@@ -1075,7 +1075,7 @@ function TWImportModal({onClose, onSave, existing}) {
           ) : (
             <div>
               <div style={{fontSize:14,color:C.green,fontWeight:700,marginBottom:4}}>{parsed.n+" candele caricate"}</div>
-              <div style={{fontSize:12,color:C.text,marginBottom:4}}>{parsed.first+" \u2192 "+parsed.last+" \u00B7 "+parsed.days+" giorni"}</div>
+              <div style={{fontSize:12,color:C.text,marginBottom:4}}>{parsed.first+" -> "+parsed.last+" - "+parsed.days+" giorni"}</div>
               <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:8}}>{"Prodotto rilevato: "+detectOHLCProduct(parsed.data)}</div>
               <label style={{display:"inline-block",padding:"6px 16px",border:"1px solid "+C.border,borderRadius:4,color:C.sub,fontSize:10,fontFamily:"inherit",cursor:"pointer"}}>
                 Cambia file<input type="file" accept=".csv" onChange={handleFile} style={{display:"none"}}/>
@@ -1086,7 +1086,7 @@ function TWImportModal({onClose, onSave, existing}) {
         {error && <div style={{marginBottom:12,padding:"8px 12px",background:C.red+"10",border:"1px solid "+C.red+"30",borderRadius:4,fontSize:11,color:C.red}}>{error}</div>}
         <div style={{padding:"10px 14px",background:C.gold+"08",border:"1px solid "+C.gold+"25",borderRadius:6,marginBottom:16}}>
           <div style={{fontSize:10,color:C.gold,fontWeight:600,marginBottom:3}}>Timezone</div>
-          <div style={{fontSize:10,color:C.sub,lineHeight:1.6}}>TradingView UTC â†’ Journal converte in ET per il matching con trade Tradovate.</div>
+          <div style={{fontSize:10,color:C.sub,lineHeight:1.6}}>TradingView UTC -> Journal converte in ET per il matching con trade Tradovate.</div>
         </div>
         <div style={{display:"flex",gap:10}}>
           <button onClick={handleSave} disabled={!parsed||saving} style={{padding:"9px 24px",background:"transparent",border:"1px solid "+(parsed?C.blue:C.muted),borderRadius:4,color:parsed?C.blue:C.muted,fontSize:11,fontFamily:"inherit",cursor:parsed?"pointer":"default",letterSpacing:"0.1em",textTransform:"uppercase"}}>
@@ -1099,7 +1099,7 @@ function TWImportModal({onClose, onSave, existing}) {
   );
 }
 
-// â”€â”€â”€ IMPORT MODAL (Tradovate) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// IMPORT MODAL (Tradovate)
 function ImportModal({onClose, trades, setTrades}) {
   const [parsed,  setParsed]  = useState(null);
   const [error,   setError]   = useState("");
@@ -1133,10 +1133,10 @@ function ImportModal({onClose, trades, setTrades}) {
       <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:12,padding:24,width:"100%",maxWidth:580}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
           <div>
-            <div style={{fontSize:13,color:C.text,fontWeight:600,letterSpacing:"0.08em"}}>IMPORT â€” TRADOVATE</div>
-            <div style={{fontSize:10,color:C.sub,marginTop:3}}>Position History CSV Â· Account â†’ Settings â†’ Orders â†’ Download CSV</div>
+            <div style={{fontSize:13,color:C.text,fontWeight:600,letterSpacing:"0.08em"}}>IMPORT - TRADOVATE</div>
+            <div style={{fontSize:10,color:C.sub,marginTop:3}}>Position History CSV - Account -> Settings -> Orders -> Download CSV</div>
           </div>
-          <button onClick={onClose} style={{background:"transparent",border:"none",color:C.sub,fontSize:22,cursor:"pointer",lineHeight:1}}>{"\u00D7"}</button>
+          <button onClick={onClose} style={{background:"transparent",border:"none",color:C.sub,fontSize:22,cursor:"pointer",lineHeight:1}}>{"X"}</button>
         </div>
         <div style={{border:"2px dashed "+C.border,borderRadius:8,padding:"24px 20px",textAlign:"center",marginBottom:14}}>
           {!parsed ? (
@@ -1180,7 +1180,7 @@ function ImportModal({onClose, trades, setTrades}) {
   );
 }
 
-// â”€â”€â”€ EXPORT MODAL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// EXPORT MODAL
 function ExportModal({trades, rv, onClose}) {
   const headers = ["date","entry_time","exit_time","duration","direction","entry_price","exit_price","pnl_dollars","r","result","product","partial","notes"];
   const rows = [...trades].reverse().map(function(t){
@@ -1196,7 +1196,7 @@ function ExportModal({trades, rv, onClose}) {
       <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:12,padding:24,width:"100%",maxWidth:680}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
           <span style={{fontSize:13,color:C.text,fontWeight:600,letterSpacing:"0.08em"}}>EXPORT CSV</span>
-          <button onClick={onClose} style={{background:"transparent",border:"none",color:C.sub,fontSize:22,cursor:"pointer",lineHeight:1}}>{"\u00D7"}</button>
+          <button onClick={onClose} style={{background:"transparent",border:"none",color:C.sub,fontSize:22,cursor:"pointer",lineHeight:1}}>{"X"}</button>
         </div>
         <textarea readOnly value={csv} rows={10} onFocus={function(e){e.target.select();}} style={{width:"100%",background:C.card,border:"1px solid "+C.border,borderRadius:6,color:C.sub,fontSize:10,padding:"12px",fontFamily:"'IBM Plex Mono',monospace",outline:"none",resize:"none",boxSizing:"border-box"}}/>
         <div style={{display:"flex",gap:10,marginTop:12}}>
@@ -1208,7 +1208,7 @@ function ExportModal({trades, rv, onClose}) {
   );
 }
 
-// â”€â”€â”€ SETTINGS MODAL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// SETTINGS MODAL
 function SettingsModal({rv, onSave, onClose}) {
   const [val, setVal] = useState(String(rv));
   return (
@@ -1216,13 +1216,13 @@ function SettingsModal({rv, onSave, onClose}) {
       <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:12,padding:26,width:380}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:22}}>
           <span style={{fontSize:13,color:C.text,fontWeight:600,letterSpacing:"0.08em"}}>IMPOSTAZIONI</span>
-          <button onClick={onClose} style={{background:"transparent",border:"none",color:C.sub,fontSize:22,cursor:"pointer",lineHeight:1}}>{"\u00D7"}</button>
+          <button onClick={onClose} style={{background:"transparent",border:"none",color:C.sub,fontSize:22,cursor:"pointer",lineHeight:1}}>{"X"}</button>
         </div>
         <div style={{marginBottom:20}}>
-          <div style={{fontSize:10,color:C.sub,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:10}}>{"1R = $ \u00B7 valore fisso in dollari"}</div>
+          <div style={{fontSize:10,color:C.sub,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:10}}>{"1R = $ - valore fisso in dollari"}</div>
           <input type="number" value={val} onChange={function(e){setVal(e.target.value);}} min="1" step="25" style={{width:"100%",background:C.card,border:"1px solid "+C.border,borderRadius:4,color:C.text,fontSize:22,fontWeight:700,padding:"12px 16px",fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}/>
-          <div style={{fontSize:10,color:C.sub,marginTop:8}}>{"Default $250 \u00B7 Aggiorna ad ogni nuovo conto prop"}</div>
-          <div style={{fontSize:10,color:C.sub,marginTop:4}}>{"Esempio: +$500 \u2192 "+(500/(Number(val)||250)).toFixed(2)+"R"}</div>
+          <div style={{fontSize:10,color:C.sub,marginTop:8}}>{"Default $250 - Aggiorna ad ogni nuovo conto prop"}</div>
+          <div style={{fontSize:10,color:C.sub,marginTop:4}}>{"Esempio: +$500 -> "+(500/(Number(val)||250)).toFixed(2)+"R"}</div>
         </div>
         <div style={{display:"flex",gap:10}}>
           <button onClick={function(){onSave(Number(val)||R_DEFAULT);}} style={{padding:"10px 26px",background:"transparent",border:"1px solid "+C.gold,borderRadius:4,color:C.gold,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.12em",textTransform:"uppercase"}}>SALVA</button>
@@ -1233,7 +1233,7 @@ function SettingsModal({rv, onSave, onClose}) {
   );
 }
 
-// â”€â”€â”€ MAIN APP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// MAIN APP
 function Journal() {
   const [tab,          setTab]          = useState("dashboard");
   const [trades,       setTrades]       = useState([]);
@@ -1315,15 +1315,15 @@ function Journal() {
             {"Hello "}<span style={{color:C.gold}}>Noemi</span>
           </div>
           <div style={{fontSize:10,color:C.sub,marginTop:5,letterSpacing:"0.12em"}}>
-            {"ES FUTURES JOURNAL \u00B7 "+trades.length+" trade \u00B7 1R = $"+rv}
-            {ohlcMeta && <span style={{color:C.green,marginLeft:10}}>{"\u00B7 ES OHLC "+ohlcMeta.days+"gg"}</span>}
-            {ohlcMetaNQ && <span style={{color:C.blue,marginLeft:6}}>{"\u00B7 NQ OHLC "+ohlcMetaNQ.days+"gg"}</span>}
+            {"ES FUTURES JOURNAL - "+trades.length+" trade - 1R = $"+rv}
+            {ohlcMeta && <span style={{color:C.green,marginLeft:10}}>{"- ES OHLC "+ohlcMeta.days+"gg"}</span>}
+            {ohlcMetaNQ && <span style={{color:C.blue,marginLeft:6}}>{"- NQ OHLC "+ohlcMetaNQ.days+"gg"}</span>}
           </div>
         </div>
         <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:8}}>
           <span style={{fontSize:11,color:C.sub}}>{time}</span>
           <button onClick={function(){setShowSettings(true);}} style={{background:"transparent",border:"1px solid "+C.border,borderRadius:4,color:C.sub,fontSize:10,padding:"5px 14px",cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.1em",textTransform:"uppercase"}}>
-            {"\u2699 settings"}
+            {"settings"}
           </button>
         </div>
       </div>

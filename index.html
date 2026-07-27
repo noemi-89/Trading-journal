@@ -186,6 +186,155 @@ function itToET(dateStr, timeStr) {
     time: String(dt.getHours()).padStart(2, "0") + ":" + String(dt.getMinutes()).padStart(2, "0"),
   };
 }
+function parseTradeTimestamp(ts) {
+  const parts = String(ts || "").split(" ");
+  if (parts.length < 2) return null;
+  const d = parts[0].split("/");
+  const t = parts[1].split(":");
+  if (d.length < 3 || t.length < 2) return null;
+  return new Date(parseInt(d[2]), parseInt(d[0]) - 1, parseInt(d[1]), parseInt(t[0]), parseInt(t[1]), parseInt(t[2] || 0));
+}
+function parseMoney(v) {
+  const n = parseFloat(String(v || "0").replace(/,/g, ""));
+  return isNaN(n) ? 0 : n;
+}
+function stableIdPart(v) {
+  return String(v || "").replace(/[^A-Za-z0-9_-]/g, "");
+}
+function weightedAvg(events) {
+  let qty = 0; let sum = 0;
+  for (let i = 0; i < events.length; i++) {
+    qty += events[i].qty;
+    sum += events[i].qty * events[i].price;
+  }
+  return qty ? sum / qty : null;
+}
+function eventKey(lot, type) {
+  const fillId = type === "entry" ? lot.entryFillId : lot.exitFillId;
+  const ts = type === "entry" ? lot.entryTs : lot.exitTs;
+  const price = type === "entry" ? lot.entryPrice : lot.exitPrice;
+  if (fillId) return type + "_fill_" + fillId;
+  return type + "_fallback_" + ts + "_" + price + "_" + lot.pairId + "_" + lot.rowIndex;
+}
+function pushEvent(map, lot, type) {
+  const key = eventKey(lot, type);
+  if (!map[key]) {
+    const isEntry = type === "entry";
+    map[key] = {
+      key: key,
+      type: type,
+      fillId: isEntry ? lot.entryFillId : lot.exitFillId,
+      ts: isEntry ? lot.entryTs : lot.exitTs,
+      rawTimestamp: isEntry ? lot.entryRawTs : lot.exitRawTs,
+      price: isEntry ? lot.entryPrice : lot.exitPrice,
+      qty: 0,
+      rowIndexes: {},
+      firstRow: lot.rowIndex,
+    };
+  }
+  map[key].qty += lot.qty;
+  map[key].rowIndexes[lot.rowIndex] = true;
+  if (lot.rowIndex < map[key].firstRow) map[key].firstRow = lot.rowIndex;
+}
+function buildTradeFromCycle(lotsByIndex, cycle) {
+  const rows = [];
+  const rowKeys = Object.keys(cycle.rowIndexes);
+  for (let i = 0; i < rowKeys.length; i++) rows.push(lotsByIndex[rowKeys[i]]);
+  rows.sort(function(a,b){ return a.rowIndex - b.rowIndex; });
+  const entryEvents = cycle.events.filter(function(e){ return e.type === "entry"; });
+  const exitEvents  = cycle.events.filter(function(e){ return e.type === "exit"; });
+  entryEvents.sort(function(a,b){ return a.ts - b.ts || a.firstRow - b.firstRow; });
+  exitEvents.sort(function(a,b){ return a.ts - b.ts || a.firstRow - b.firstRow; });
+  const firstEntry = entryEvents[0];
+  const lastExit = exitEvents.length ? exitEvents[exitEvents.length - 1] : entryEvents[entryEvents.length - 1];
+  const entryParts = firstEntry.rawTimestamp.split(" ");
+  const exitParts = lastExit.rawTimestamp.split(" ");
+  const entryET = itToET(entryParts[0], entryParts[1] || "00:00:00");
+  const exitET = itToET(exitParts[0], exitParts[1] || "00:00:00");
+  const pnl = rows.reduce(function(s,r){ return s + r.pnl; }, 0);
+  const entryIds = entryEvents.map(function(e){ return stableIdPart(e.fillId || e.key); }).join("-");
+  const exitIds = exitEvents.map(function(e){ return stableIdPart(e.fillId || e.key); }).join("-");
+  const first = rows[0] || {};
+  const result = pnl > 0 ? "Win" : pnl < 0 ? "Loss" : "BE";
+  const sourceIds = rows.map(function(r){ return r.legacyId; });
+  return {
+    id: "tv_real_" + stableIdPart(first.account) + "_" + stableIdPart(first.contract) + "_" + first.direction + "_" + entryIds + "_" + exitIds,
+    date: entryET.date,
+    entry_time: entryET.time,
+    exit_time: exitET.time,
+    duration: Math.max(0, Math.round((lastExit.ts - firstEntry.ts) / 60000)),
+    direction: first.direction,
+    side: first.direction === "Buy" ? "Long" : "Short",
+    entry_price: weightedAvg(entryEvents),
+    exit_price: weightedAvg(exitEvents),
+    pnl_dollars: Math.round(pnl * 100) / 100,
+    result: result,
+    product: first.product || "ES",
+    contract: first.contract || "",
+    account: first.account || "",
+    quantity: cycle.maxNet,
+    max_position_size: cycle.maxNet,
+    entry_leg_count: entryEvents.length,
+    exit_leg_count: exitEvents.length,
+    partial: exitEvents.length > 1,
+    source_row_count: rows.length,
+    source_row_ids: sourceIds,
+    notes: "",
+  };
+}
+function aggregateTradovateLots(lots) {
+  const byLane = {};
+  for (let i = 0; i < lots.length; i++) {
+    const lot = lots[i];
+    const lane = [lot.account, lot.contract, lot.product, lot.direction].join("|");
+    if (!byLane[lane]) byLane[lane] = [];
+    byLane[lane].push(lot);
+  }
+  const trades = [];
+  const lanes = Object.keys(byLane);
+  for (let li = 0; li < lanes.length; li++) {
+    const laneLots = byLane[lanes[li]];
+    const eventMap = {};
+    const lotsByIndex = {};
+    for (let i = 0; i < laneLots.length; i++) {
+      lotsByIndex[laneLots[i].rowIndex] = laneLots[i];
+      pushEvent(eventMap, laneLots[i], "entry");
+      pushEvent(eventMap, laneLots[i], "exit");
+    }
+    const events = Object.keys(eventMap).map(function(k){ return eventMap[k]; });
+    events.sort(function(a,b){
+      if (a.ts !== b.ts) return a.ts - b.ts;
+      if (a.type !== b.type) return a.type === "entry" ? -1 : 1;
+      return a.firstRow - b.firstRow;
+    });
+    let cycle = null; let net = 0;
+    for (let ei = 0; ei < events.length; ei++) {
+      const ev = events[ei];
+      if (!cycle) cycle = { events: [], rowIndexes: {}, maxNet: 0 };
+      cycle.events.push(ev);
+      const rowKeys = Object.keys(ev.rowIndexes);
+      for (let ri = 0; ri < rowKeys.length; ri++) cycle.rowIndexes[rowKeys[ri]] = true;
+      if (ev.type === "entry") {
+        net += ev.qty;
+        if (net > cycle.maxNet) cycle.maxNet = net;
+      } else {
+        net -= ev.qty;
+        if (net <= 0.000001) {
+          trades.push(buildTradeFromCycle(lotsByIndex, cycle));
+          cycle = null;
+          net = 0;
+        }
+      }
+    }
+    if (cycle) trades.push(buildTradeFromCycle(lotsByIndex, cycle));
+  }
+  trades.sort(function(a,b){
+    const ad = new Date(a.date + "T" + a.entry_time + ":00").getTime();
+    const bd = new Date(b.date + "T" + b.entry_time + ":00").getTime();
+    return bd - ad;
+  });
+  return trades;
+}
 function parseTradovateCSV(text) {
   const content = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const lines = content.trim().split("\n").filter(function(l) { return l.trim(); });
@@ -194,18 +343,9 @@ function parseTradovateCSV(text) {
   if (header.indexOf("Bought Timestamp") === -1) {
     return { trades: [], errors: ["Formato non riconosciuto. Usa Position History, NON Orders."] };
   }
-  const trades = [];
+  const lots = [];
   const errors = [];
-  const posIdCount = {};
-  // Prima passata: conta quante righe per ogni Position ID (per rilevare partial)
-  for (let i = 1; i < lines.length; i++) {
-    try {
-      const row = parseCSVLine(lines[i]);
-      const posId = row[0] || "";
-      if (posId) posIdCount[posId] = (posIdCount[posId] || 0) + 1;
-    } catch(e) {}
-  }
-  // Seconda passata: parse completo
+  const seenRows = {};
   for (let i = 1; i < lines.length; i++) {
     try {
       const row = parseCSVLine(lines[i]);
@@ -214,41 +354,52 @@ function parseTradovateCSV(text) {
       const boughtTs = obj["Bought Timestamp"];
       const soldTs   = obj["Sold Timestamp"];
       if (!boughtTs || !soldTs) continue;
+      const pairId = obj["Pair ID"] || "";
+      const dedupeKey = pairId ? ("pair:" + pairId) : ("row:" + lines[i]);
+      if (seenRows[dedupeKey]) continue;
+      seenRows[dedupeKey] = true;
       const bParts = boughtTs.split(" "); const bDate = bParts[0]; const bTime = bParts[1];
       const sParts = soldTs.split(" ");   const sDate = sParts[0]; const sTime = sParts[1];
-      const bp = bDate.split("/"); const bt = bTime.split(":");
-      const sp = sDate.split("/"); const st = sTime.split(":");
-      const bDt = new Date(parseInt(bp[2]), parseInt(bp[0]) - 1, parseInt(bp[1]), parseInt(bt[0]), parseInt(bt[1]), parseInt(bt[2] || 0));
-      const sDt = new Date(parseInt(sp[2]), parseInt(sp[0]) - 1, parseInt(sp[1]), parseInt(st[0]), parseInt(st[1]), parseInt(st[2] || 0));
-      const isBuy = bDt < sDt;
-      const entryDate = isBuy ? bDate : sDate; const entryTime = isBuy ? bTime : sTime;
-      const exitDate  = isBuy ? sDate : bDate; const exitTime  = isBuy ? sTime : bTime;
-      const entryET = itToET(entryDate, entryTime);
-      const exitET  = itToET(exitDate,  exitTime);
-      const buyPrice  = parseFloat(obj["Buy Price"]);
-      const sellPrice = parseFloat(obj["Sell Price"]);
-      const pnl = parseFloat(obj["P/L"].replace(/,/g, ""));
-      const duration = Math.round(Math.abs(sDt - bDt) / 60000);
-      const result = pnl > 0 ? "Win" : pnl < 0 ? "Loss" : "BE";
+      const bDt = parseTradeTimestamp(boughtTs);
+      const sDt = parseTradeTimestamp(soldTs);
+      if (!bDt || !sDt) continue;
+      const isBuy = bDt.getTime() <= sDt.getTime();
+      const qty = parseMoney(obj["Paired Qty"]);
+      if (qty <= 0) continue;
+      const buyPrice  = parseMoney(obj["Buy Price"]);
+      const sellPrice = parseMoney(obj["Sell Price"]);
+      const pnl = parseMoney(obj["P/L"]);
       const posId  = obj["Position ID"] || "";
-      const pairId = obj["Pair ID"] || "";
-      const isPartial = posIdCount[posId] > 1;
-      trades.push({
-        id:          (posId && pairId) ? (posId + "_" + pairId) : ("tv_" + Date.now() + "_" + i),
-        date:        entryET.date,
-        entry_time:  entryET.time,
-        exit_time:   exitET.time,
-        duration:    duration,
-        direction:   isBuy ? "Buy" : "Sell",
-        entry_price: isBuy ? buyPrice : sellPrice,
-        exit_price:  isBuy ? sellPrice : buyPrice,
-        pnl_dollars: isNaN(pnl) ? 0 : pnl,
-        result:      result,
-        product:     obj["Product"] || "ES",
-        notes:       "",
-        partial:     isPartial,
+      const legacyId = (posId && pairId) ? (posId + "_" + pairId) : ("tv_" + i);
+      lots.push({
+        rowIndex: i,
+        legacyId: legacyId,
+        positionId: posId,
+        pairId: pairId,
+        buyFillId: obj["Buy Fill ID"] || "",
+        sellFillId: obj["Sell Fill ID"] || "",
+        account: obj["Account"] || "",
+        contract: obj["Contract"] || "",
+        product: obj["Product"] || "ES",
+        qty: qty,
+        pnl: pnl,
+        direction: isBuy ? "Buy" : "Sell",
+        entryFillId: isBuy ? (obj["Buy Fill ID"] || "") : (obj["Sell Fill ID"] || ""),
+        exitFillId: isBuy ? (obj["Sell Fill ID"] || "") : (obj["Buy Fill ID"] || ""),
+        entryTs: isBuy ? bDt.getTime() : sDt.getTime(),
+        exitTs: isBuy ? sDt.getTime() : bDt.getTime(),
+        entryRawTs: isBuy ? boughtTs : soldTs,
+        exitRawTs: isBuy ? soldTs : boughtTs,
+        entryPrice: isBuy ? buyPrice : sellPrice,
+        exitPrice: isBuy ? sellPrice : buyPrice,
       });
     } catch(e) { errors.push("Riga " + (i + 1) + ": " + e.message); }
+  }
+  const trades = aggregateTradovateLots(lots);
+  const rawPnl = lots.reduce(function(s,l){ return s + l.pnl; }, 0);
+  const aggPnl = trades.reduce(function(s,t){ return s + (t.pnl_dollars || 0); }, 0);
+  if (Math.abs(rawPnl - aggPnl) > 0.01) {
+    errors.push("Warning P/L: raw " + rawPnl.toFixed(2) + " diverso da aggregato " + aggPnl.toFixed(2));
   }
   return { trades: trades, errors: errors };
 }
@@ -683,28 +834,133 @@ function DayCell({info, stats, rv, today, showOnlyR, onSelect, isSelected}) {
   );
 }
 
-// WEEK CELL
-function WeekCell({weekTrades, rv, showOnlyR}) {
-  if (!weekTrades || !weekTrades.length) return (
-    <div style={{background:C.dim,border:"1px solid "+C.border,borderRadius:6,padding:"8px 10px",minHeight:72,display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <span style={{fontSize:9,color:C.muted}}>{"-"}</span>
+function weekKey(week) {
+  if (!week || !week.length) return "";
+  return week[0].dateStr + "_" + week[week.length - 1].dateStr;
+}
+function toggleWeekSelection(currentKey, clickedKey) {
+  return currentKey === clickedKey ? null : clickedKey;
+}
+function tradesForWeekRow(week, byDate) {
+  const out = [];
+  for (let d = 0; d < week.length; d++) {
+    const dt = byDate[week[d].dateStr];
+    if (dt) for (let j = 0; j < dt.length; j++) out.push(dt[j]);
+  }
+  return out;
+}
+function weekRangeLabel(week) {
+  if (!week || !week.length) return "";
+  const first = week[0].dateStr.split("-").map(Number);
+  const last  = week[week.length - 1].dateStr.split("-").map(Number);
+  const fMonth = MONTHS_IT[first[1] - 1].toUpperCase();
+  const lMonth = MONTHS_IT[last[1] - 1].toUpperCase();
+  if (first[1] === last[1]) return first[2] + "-" + last[2] + " " + lMonth;
+  return first[2] + " " + fMonth + " - " + last[2] + " " + lMonth;
+}
+function productFamily(trade) {
+  const raw = [trade && trade.product, trade && trade.contract];
+  for (let i = 0; i < raw.length; i++) {
+    const symbol = String(raw[i] || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (/^M?ES([FGHJKMNQUVXZ][0-9][0-9]?)?$/.test(symbol)) return "ES";
+    if (/^M?NQ([FGHJKMNQUVXZ][0-9][0-9]?)?$/.test(symbol)) return "NQ";
+  }
+  return "OTHER";
+}
+function fmtPfValue(m) {
+  if (!m) return "-";
+  if (!isFinite(m.pf) || isNaN(m.pf)) return "99.00";
+  return m.pf.toFixed(2);
+}
+function WeekMetric({label, value, color}) {
+  return (
+    <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:8,padding:"12px 14px",minHeight:70}}>
+      <div style={{fontSize:9,color:C.sub,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:6}}>{label}</div>
+      <div style={{fontSize:17,fontWeight:700,color:color||C.text,lineHeight:1.05}}>{value}</div>
     </div>
   );
+}
+function WeekFamilyBox({title, trades, rv, emptyText}) {
+  const m = calcStats(trades, rv);
+  if (!m) return (
+    <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:8,padding:"14px 16px",minHeight:128}}>
+      <div style={{fontSize:10,color:C.gold,letterSpacing:"0.12em",textTransform:"uppercase",fontWeight:700,marginBottom:12}}>{title}</div>
+      <div style={{fontSize:12,color:C.sub}}>{emptyText}</div>
+    </div>
+  );
+  const avgR = m.n ? m.totalR / m.n : 0;
+  return (
+    <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:8,padding:"14px 16px"}}>
+      <div style={{fontSize:10,color:C.gold,letterSpacing:"0.12em",textTransform:"uppercase",fontWeight:700,marginBottom:12}}>{title}</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:10}}>
+        <WeekMetric label="Trade" value={String(m.n)} />
+        <WeekMetric label="W / L / BE" value={m.w+" / "+m.l+" / "+m.be} color={C.sub} />
+        <WeekMetric label="Win Rate" value={m.wr.toFixed(1)+"%"} color={m.wr>=50?C.green:C.red} />
+        <WeekMetric label="Net R" value={fmtR(m.totalR)} color={m.totalR>=0?C.green:C.red} />
+        <WeekMetric label="PF" value={fmtPfValue(m)} color={m.pf>=1?C.green:C.red} />
+        <WeekMetric label="Avg R / Trade" value={fmtR(avgR)} color={avgR>=0?C.green:C.red} />
+      </div>
+    </div>
+  );
+}
+function WeekStatsPanel({week, trades, rv}) {
+  const m = calcStats(trades, rv);
+  const esTrades = trades.filter(function(t){ return productFamily(t) === "ES"; });
+  const nqTrades = trades.filter(function(t){ return productFamily(t) === "NQ"; });
+  const avgR = m && m.n ? m.totalR / m.n : 0;
+  return (
+    <div data-testid="week-stats-panel" style={{background:C.card,border:"1px solid "+C.gold+"45",borderRadius:10,padding:"16px 18px",marginTop:12}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,marginBottom:14,flexWrap:"wrap"}}>
+        <div>
+          <div style={{fontSize:9,color:C.sub,letterSpacing:"0.13em",textTransform:"uppercase",marginBottom:4}}>SETTIMANA</div>
+          <div style={{fontSize:18,fontWeight:700,color:C.text,letterSpacing:"0.05em"}}>{weekRangeLabel(week)}</div>
+        </div>
+        <div style={{fontSize:11,color:C.gold,border:"1px solid "+C.gold+"45",borderRadius:4,padding:"5px 9px",whiteSpace:"nowrap"}}>{"1R = "+rv+" USD"}</div>
+      </div>
+      {m ? (
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:10,marginBottom:12}}>
+          <WeekMetric label="Net R" value={fmtR(m.totalR)} color={m.totalR>=0?C.green:C.red} />
+          <WeekMetric label="Trade" value={String(m.n)} />
+          <WeekMetric label="W / L / BE" value={m.w+" / "+m.l+" / "+m.be} color={C.sub} />
+          <WeekMetric label="Win Rate" value={m.wr.toFixed(1)+"%"} color={m.wr>=50?C.green:C.red} />
+          <WeekMetric label="PF" value={fmtPfValue(m)} color={m.pf>=1?C.green:C.red} />
+          <WeekMetric label="Avg R / Trade" value={fmtR(avgR)} color={avgR>=0?C.green:C.red} />
+        </div>
+      ) : (
+        <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:8,padding:"14px 16px",fontSize:12,color:C.sub,marginBottom:12}}>Nessun trade in questa settimana</div>
+      )}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(230px,1fr))",gap:12}}>
+        <WeekFamilyBox title="ES / MES" trades={esTrades} rv={rv} emptyText="Nessun trade ES/MES" />
+        <WeekFamilyBox title="NQ / MNQ" trades={nqTrades} rv={rv} emptyText="Nessun trade NQ/MNQ" />
+      </div>
+    </div>
+  );
+}
+
+// WEEK CELL
+function WeekCell({weekTrades, rv, showOnlyR, selected, onClick}) {
+  weekTrades = weekTrades || [];
   const closed   = weekTrades.filter(function(t){ return t.result !== "Open"; });
   const totalPnl = closed.reduce(function(s,t){ return s+(t.pnl_dollars||0); }, 0);
   const r   = calcR(totalPnl, rv);
   const wins = closed.filter(function(t){ return t.result === "Win"; }).length;
   const wr  = closed.length ? wins / closed.length * 100 : 0;
-  const isColored = Math.abs(r) >= 0.01;
+  const isColored = closed.length && Math.abs(r) >= 0.01;
   const bg  = isColored ? dayBg(r) : C.card;
   const mainCol = isColored ? "#FFFFFF" : C.sub;
   const subCol  = isColored ? "rgba(255,255,255,0.80)" : C.muted;
   return (
-    <div style={{background:bg,border:"1px solid "+(isColored?"transparent":C.border),borderRadius:6,padding:"8px 10px",minHeight:72}}>
+    <div role="button" tabIndex={0} aria-pressed={selected?"true":"false"} onClick={onClick} onKeyDown={function(e){if(e.key==="Enter"||e.key===" "){e.preventDefault();onClick();}}} style={{background:bg,border:"1px solid "+(selected?C.gold+"90":(isColored?"transparent":C.border)),borderRadius:6,padding:"8px 10px",minHeight:72,cursor:"pointer",boxShadow:selected?"0 0 0 1px "+C.gold+"35 inset":"none"}}>
       <div style={{fontSize:9,color:isColored?"rgba(255,255,255,0.65)":C.sub,marginBottom:4,letterSpacing:"0.08em",fontWeight:600}}>WEEK</div>
-      <div style={{fontSize:14,fontWeight:700,color:mainCol,lineHeight:1,marginBottom:2}}>{fmtR(r)}</div>
-      {!showOnlyR && <div style={{fontSize:10,color:subCol,marginBottom:2}}>{fmtD(totalPnl)}</div>}
-      <div style={{fontSize:9,color:subCol}}>{closed.length+"t - "+wr.toFixed(0)+"%W"}</div>
+      {closed.length ? (
+        <div>
+          <div style={{fontSize:14,fontWeight:700,color:mainCol,lineHeight:1,marginBottom:2}}>{fmtR(r)}</div>
+          {!showOnlyR && <div style={{fontSize:10,color:subCol,marginBottom:2}}>{fmtD(totalPnl)}</div>}
+          <div style={{fontSize:9,color:subCol}}>{closed.length+"t - "+wr.toFixed(0)+"%W"}</div>
+        </div>
+      ) : (
+        <div style={{fontSize:14,fontWeight:700,color:C.muted,lineHeight:1,marginTop:13}}>{"-"}</div>
+      )}
     </div>
   );
 }
@@ -715,6 +971,7 @@ function CalendarioView({trades, rv, onImport, onExport, onTWImport, ohlcMeta, s
   const [year,  setYear]  = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth());
   const [selectedDate, setSelectedDate] = useState(null);
+  const [selectedWeekKey, setSelectedWeekKey] = useState(null);
   const today = now.toISOString().slice(0, 10);
   const byDate = {};
   trades.forEach(function(t){ if (!byDate[t.date]) byDate[t.date]=[]; byDate[t.date].push(t); });
@@ -726,12 +983,17 @@ function CalendarioView({trades, rv, onImport, onExport, onTWImport, ohlcMeta, s
     return { n: closed.length, totalPnl: totalPnl, wr: wins / closed.length * 100 };
   }
   const weeks = getCalendarWeeks(year, month);
+  const weekRows = weeks.map(function(week){
+    const k = weekKey(week);
+    return { key: k, week: week, trades: tradesForWeekRow(week, byDate) };
+  });
+  const selectedWeek = weekRows.filter(function(w){ return w.key === selectedWeekKey; })[0] || null;
   const monthTrades = trades.filter(function(t){
     const p = t.date.split("-").map(Number); return p[0]===year && p[1]-1===month;
   });
   const ms = calcStats(monthTrades, rv);
-  function prevM(){ if (month===0){setYear(function(y){return y-1;}); setMonth(11);} else setMonth(function(m){return m-1;}); }
-  function nextM(){ if (month===11){setYear(function(y){return y+1;}); setMonth(0);} else setMonth(function(m){return m+1;}); }
+  function prevM(){ setSelectedWeekKey(null); setSelectedDate(null); if (month===0){setYear(function(y){return y-1;}); setMonth(11);} else setMonth(function(m){return m-1;}); }
+  function nextM(){ setSelectedWeekKey(null); setSelectedDate(null); if (month===11){setYear(function(y){return y+1;}); setMonth(0);} else setMonth(function(m){return m+1;}); }
   const monthSummary = [
     {label:"WIN RATE", val:ms?ms.wr.toFixed(0)+"%":"", col:ms?(ms.wr>=50?C.green:C.red):C.sub},
     {label:"TRADE",    val:ms?String(ms.n):"",          col:C.text},
@@ -777,22 +1039,16 @@ function CalendarioView({trades, rv, onImport, onExport, onTWImport, ohlcMeta, s
           {DAYS_IT.map(function(d){ return <div key={d} style={{textAlign:"center",fontSize:10,color:C.sub,letterSpacing:"0.1em",padding:"3px 0"}}>{d}</div>; })}
           <div style={{textAlign:"center",fontSize:9,color:C.muted,letterSpacing:"0.08em",padding:"3px 0"}}>WEEK</div>
         </div>
-        {weeks.map(function(week, wi){
-          const wkTrades = [];
-          for (let d = 0; d < week.length; d++) {
-            if (week[d].inMonth) {
-              const dt = byDate[week[d].dateStr];
-              if (dt) for (let j = 0; j < dt.length; j++) wkTrades.push(dt[j]);
-            }
-          }
+        {weekRows.map(function(row, wi){
           return (
             <div key={wi} style={{display:"grid",gridTemplateColumns:"repeat(5,1fr) 80px",gap:6,marginBottom:6}}>
-              {week.map(function(info, di){ return <DayCell key={di} info={info} stats={dayStats(info.dateStr)} rv={rv} today={today} showOnlyR={showOnlyR} onSelect={function(d){setSelectedDate(selectedDate===d?null:d);}} isSelected={selectedDate===info.dateStr}/>; })}
-              <WeekCell weekTrades={wkTrades} rv={rv} showOnlyR={showOnlyR}/>
+              {row.week.map(function(info, di){ return <DayCell key={di} info={info} stats={dayStats(info.dateStr)} rv={rv} today={today} showOnlyR={showOnlyR} onSelect={function(d){setSelectedDate(selectedDate===d?null:d);}} isSelected={selectedDate===info.dateStr}/>; })}
+              <WeekCell weekTrades={row.trades} rv={rv} showOnlyR={showOnlyR} selected={selectedWeekKey===row.key} onClick={function(){setSelectedWeekKey(function(k){return toggleWeekSelection(k,row.key);});}}/>
             </div>
           );
         })}
       </div>
+      {selectedWeek && <WeekStatsPanel week={selectedWeek.week} trades={selectedWeek.trades} rv={rv}/>}
       {selectedDate && (
         <DayTradeList trades={byDate[selectedDate]||[]} rv={rv} date={selectedDate}/>
       )}

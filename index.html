@@ -110,6 +110,9 @@ function getTradeResult(t) {
   if (Math.abs(pnl) <= BE_THRESHOLD_DOLLARS) return "BE";
   return pnl > 0 ? "Win" : pnl < 0 ? "Loss" : "BE";
 }
+function calcWinRatePercent(wins, losses) {
+  return wins + losses ? wins / (wins + losses) * 100 : 0;
+}
 function fmtR(r)         { if (r == null || isNaN(r)) return "-"; return (r >= 0 ? "+" : "") + r.toFixed(2) + "R"; }
 function fmtD(d)         { if (d == null || isNaN(d)) return "-"; return (d >= 0 ? "+" : "-") + "$" + Math.abs(Math.round(d)).toLocaleString("en-US"); }
 function fmtDur(m)       { if (m == null) return "-"; if (m < 60) return Math.round(m) + "m"; return Math.floor(m / 60) + "h " + Math.round(m % 60) + "m"; }
@@ -488,8 +491,7 @@ function calcStats(trades, rv) {
   const wins   = closed.filter(function(t) { return getTradeResult(t) === "Win"; });
   const losses = closed.filter(function(t) { return getTradeResult(t) === "Loss"; });
   const bes    = closed.filter(function(t) { return getTradeResult(t) === "BE"; });
-  const wlN = wins.length + losses.length;
-  const wr = wlN ? wins.length / wlN : 0;
+  const wr = calcWinRatePercent(wins.length, losses.length) / 100;
   const wR = wins.map(function(t)   { return calcR(t.pnl_dollars, rv); });
   const lR = losses.map(function(t) { return calcR(t.pnl_dollars, rv); });
   const avgW = wR.length ? wR.reduce(function(a,b){return a+b;},0) / wR.length : 0;
@@ -532,6 +534,7 @@ function DonutChart({w, l, be}) {
   const R = 46, cx = 60, cy = 60, sw = 15;
   const circ = 2 * Math.PI * R;
   const wP = w / total, lP = l / total, bP = be / total;
+  const wr = calcWinRatePercent(w, l);
   const GAP = 0.025;
   return (
     <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"16px 20px",marginBottom:14}}>
@@ -549,7 +552,7 @@ function DonutChart({w, l, be}) {
               strokeDasharray={(circ*(bP-GAP*0.5)).toFixed(2)+" "+circ} strokeLinecap="butt"
               transform={"rotate("+((wP+lP)*360).toFixed(2)+" "+cx+" "+cy+")"}/>}
           </g>
-          <text x={cx} y={cy-5} fill={C.text} fontSize="18" fontWeight="700" textAnchor="middle">{Math.round(wP*100)+"%"}</text>
+          <text x={cx} y={cy-5} fill={C.text} fontSize="18" fontWeight="700" textAnchor="middle">{wr.toFixed(0)+"%"}</text>
           <text x={cx} y={cy+11} fill={C.sub} fontSize="9" textAnchor="middle" letterSpacing="0.08em">WIN RATE</text>
         </svg>
         <div style={{display:"flex",flexDirection:"column",gap:12}}>
@@ -627,7 +630,7 @@ function DurationAnalysis({trades, rv}) {
     const wins=grp.filter(function(t){return getTradeResult(t)==="Win";}).length;
     const losses=grp.filter(function(t){return getTradeResult(t)==="Loss";}).length;
     const totalPnl=grp.reduce(function(s,t){return s+(t.pnl_dollars||0);},0);
-    return {label:b.label,n:grp.length,wr:wins+losses?wins/(wins+losses)*100:null,r:calcR(totalPnl,rv)};
+    return {label:b.label,n:grp.length,wr:wins+losses?calcWinRatePercent(wins,losses):null,r:calcR(totalPnl,rv)};
   }).filter(function(b){return b.n>0;});
   if (!buckets.length) return null;
   const maxR=Math.max.apply(null,buckets.map(function(b){return Math.abs(b.r);}).concat([0.1]));
@@ -955,7 +958,7 @@ function WeekCell({weekTrades, rv, showOnlyR, selected, onClick}) {
   const r   = calcR(totalPnl, rv);
   const wins = closed.filter(function(t){ return getTradeResult(t) === "Win"; }).length;
   const losses = closed.filter(function(t){ return getTradeResult(t) === "Loss"; }).length;
-  const wr  = wins + losses ? wins / (wins + losses) * 100 : 0;
+  const wr  = calcWinRatePercent(wins, losses);
   const isColored = closed.length && Math.abs(r) >= 0.01;
   const bg  = isColored ? dayBg(r) : C.card;
   const mainCol = isColored ? "#FFFFFF" : C.sub;
@@ -992,7 +995,7 @@ function CalendarioView({trades, rv, onImport, onExport, onTWImport, ohlcMeta, s
     const totalPnl = closed.reduce(function(s,t){ return s+(t.pnl_dollars||0); }, 0);
     const wins = closed.filter(function(t){ return getTradeResult(t) === "Win"; }).length;
     const losses = closed.filter(function(t){ return getTradeResult(t) === "Loss"; }).length;
-    return { n: closed.length, totalPnl: totalPnl, wr: wins + losses ? wins / (wins + losses) * 100 : 0 };
+    return { n: closed.length, totalPnl: totalPnl, wr: calcWinRatePercent(wins, losses) };
   }
   const weeks = getCalendarWeeks(year, month);
   const weekRows = weeks.map(function(week){

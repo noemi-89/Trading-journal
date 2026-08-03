@@ -58,6 +58,7 @@ const FASCIA_LIST= [
 ];
 const FASCIA_MAP = {};
 FASCIA_LIST.forEach(function(item){ FASCIA_MAP[item.key] = item.col; });
+const BE_THRESHOLD_DOLLARS = 150;
 
 const SEED = [
   { id:"s01",date:"2026-05-16",entry_time:"13:45",exit_time:"14:15",duration:30, direction:"Buy", entry_price:7520,  exit_price:7504,   pnl_dollars:-800, result:"Loss",notes:"",partial:false,product:"ES" },
@@ -103,6 +104,12 @@ function getSession(t) {
   return "Power Hour";
 }
 function calcR(pnl, rv)  { return pnl / rv; }
+function getTradeResult(t) {
+  if (!t || t.result === "Open") return "Open";
+  const pnl = Number(t.pnl_dollars || 0);
+  if (Math.abs(pnl) <= BE_THRESHOLD_DOLLARS) return "BE";
+  return pnl > 0 ? "Win" : pnl < 0 ? "Loss" : "BE";
+}
 function fmtR(r)         { if (r == null || isNaN(r)) return "-"; return (r >= 0 ? "+" : "") + r.toFixed(2) + "R"; }
 function fmtD(d)         { if (d == null || isNaN(d)) return "-"; return (d >= 0 ? "+" : "-") + "$" + Math.abs(Math.round(d)).toLocaleString("en-US"); }
 function fmtDur(m)       { if (m == null) return "-"; if (m < 60) return Math.round(m) + "m"; return Math.floor(m / 60) + "h " + Math.round(m % 60) + "m"; }
@@ -255,7 +262,7 @@ function buildTradeFromCycle(lotsByIndex, cycle) {
   const entryIds = entryEvents.map(function(e){ return stableIdPart(e.fillId || e.key); }).join("-");
   const exitIds = exitEvents.map(function(e){ return stableIdPart(e.fillId || e.key); }).join("-");
   const first = rows[0] || {};
-  const result = pnl > 0 ? "Win" : pnl < 0 ? "Loss" : "BE";
+  const result = getTradeResult({ pnl_dollars: pnl });
   const sourceIds = rows.map(function(r){ return r.legacyId; });
   return {
     id: "tv_real_" + stableIdPart(first.account) + "_" + stableIdPart(first.contract) + "_" + first.direction + "_" + entryIds + "_" + exitIds,
@@ -458,7 +465,7 @@ function calcMaeMfeStats(trades, ohlcES, ohlcNQ) {
   const results = [];
   for (let i = 0; i < trades.length; i++) {
     const t = trades[i];
-    if (t.result !== "Open" && t.entry_price && t.exit_price) {
+    if (getTradeResult(t) !== "Open" && t.entry_price && t.exit_price) {
       const r = calcMaeMfe(t, ohlcES, ohlcNQ);
       if (r) results.push(r);
     }
@@ -476,12 +483,13 @@ function calcMaeMfeStats(trades, ohlcES, ohlcNQ) {
 
 // STATS ENGINE
 function calcStats(trades, rv) {
-  const closed = trades.filter(function(t) { return t.result !== "Open"; });
+  const closed = trades.filter(function(t) { return getTradeResult(t) !== "Open"; });
   if (!closed.length) return null;
-  const wins   = closed.filter(function(t) { return t.result === "Win"; });
-  const losses = closed.filter(function(t) { return t.result === "Loss"; });
-  const bes    = closed.filter(function(t) { return t.result === "BE"; });
-  const wr = wins.length / closed.length;
+  const wins   = closed.filter(function(t) { return getTradeResult(t) === "Win"; });
+  const losses = closed.filter(function(t) { return getTradeResult(t) === "Loss"; });
+  const bes    = closed.filter(function(t) { return getTradeResult(t) === "BE"; });
+  const wlN = wins.length + losses.length;
+  const wr = wlN ? wins.length / wlN : 0;
   const wR = wins.map(function(t)   { return calcR(t.pnl_dollars, rv); });
   const lR = losses.map(function(t) { return calcR(t.pnl_dollars, rv); });
   const avgW = wR.length ? wR.reduce(function(a,b){return a+b;},0) / wR.length : 0;
@@ -493,7 +501,7 @@ function calcStats(trades, rv) {
   const totalR = closed.reduce(function(s,t){return s+calcR(t.pnl_dollars,rv);},0);
   const totalD = closed.reduce(function(s,t){return s+(t.pnl_dollars||0);},0);
   let mxW=0,mxL=0,cW=0,cL=0;
-  closed.forEach(function(t){if(t.result==="Win"){cW++;cL=0;mxW=Math.max(mxW,cW);}else if(t.result==="Loss"){cL++;cW=0;mxL=Math.max(mxL,cL);}else{cW=0;cL=0;}});
+  closed.forEach(function(t){const res=getTradeResult(t);if(res==="Win"){cW++;cL=0;mxW=Math.max(mxW,cW);}else if(res==="Loss"){cL++;cW=0;mxL=Math.max(mxL,cL);}else{cW=0;cL=0;}});
   const rev=[...closed].reverse(); let pk=0,maxDD=0,cum=0;
   rev.forEach(function(t){cum+=calcR(t.pnl_dollars,rv);if(cum>pk)pk=cum;const dd=pk-cum;if(dd>maxDD)maxDD=dd;});
   const wDur = wins.filter(function(t){return t.duration!=null;});
@@ -563,7 +571,7 @@ function DonutChart({w, l, be}) {
 // DAILY P&L BAR CHART
 function DailyPnlChart({trades, rv}) {
   const byDate = {};
-  trades.filter(function(t){return t.result!=="Open";}).forEach(function(t){
+  trades.filter(function(t){return getTradeResult(t)!=="Open";}).forEach(function(t){
     if (!byDate[t.date]) byDate[t.date]=0;
     byDate[t.date]+=(t.pnl_dollars||0);
   });
@@ -612,13 +620,14 @@ function DurationAnalysis({trades, rv}) {
     {label:"30-60min",min:30,max:60},
     {label:"> 60min", min:60,max:Infinity},
   ];
-  const closed=trades.filter(function(t){return t.result!=="Open"&&t.duration!=null;});
+  const closed=trades.filter(function(t){return getTradeResult(t)!=="Open"&&t.duration!=null;});
   if (!closed.length) return null;
   const buckets=BUCKETS.map(function(b){
     const grp=closed.filter(function(t){return t.duration>=b.min&&t.duration<b.max;});
-    const wins=grp.filter(function(t){return t.result==="Win";}).length;
+    const wins=grp.filter(function(t){return getTradeResult(t)==="Win";}).length;
+    const losses=grp.filter(function(t){return getTradeResult(t)==="Loss";}).length;
     const totalPnl=grp.reduce(function(s,t){return s+(t.pnl_dollars||0);},0);
-    return {label:b.label,n:grp.length,wr:grp.length?wins/grp.length*100:null,r:calcR(totalPnl,rv)};
+    return {label:b.label,n:grp.length,wr:wins+losses?wins/(wins+losses)*100:null,r:calcR(totalPnl,rv)};
   }).filter(function(b){return b.n>0;});
   if (!buckets.length) return null;
   const maxR=Math.max.apply(null,buckets.map(function(b){return Math.abs(b.r);}).concat([0.1]));
@@ -667,7 +676,7 @@ function DurationAnalysis({trades, rv}) {
 // DAY TRADE LIST
 function DayTradeList({trades, rv, date}) {
   if (!trades||!trades.length) return null;
-  const closed=trades.filter(function(t){return t.result!=="Open";});
+  const closed=trades.filter(function(t){return getTradeResult(t)!=="Open";});
   if (!closed.length) return null;
   const totalPnl=closed.reduce(function(s,t){return s+(t.pnl_dollars||0);},0);
   const totalR=calcR(totalPnl,rv);
@@ -685,7 +694,8 @@ function DayTradeList({trades, rv, date}) {
       </div>
       {closed.map(function(t,i){
         const r=calcR(t.pnl_dollars||0,rv);
-        const rCol=t.result==="Win"?C.green:t.result==="Loss"?C.red:C.gold;
+        const tradeResult=getTradeResult(t);
+        const rCol=tradeResult==="Win"?C.green:tradeResult==="Loss"?C.red:C.gold;
         const fascia=getFascia(t.entry_time||"");
         const fasciaCol=FASCIA_COL[fascia]||"#374050";
         return(
@@ -716,8 +726,8 @@ function DayTradeList({trades, rv, date}) {
 }
 
 // EQUITY CURVE
-function EquityCurve({trades, rv}) {
-  const closed = [...trades].filter(function(t){return t.result!=="Open";}).reverse();
+function EquityCurve({trades, rv, showOnlyR}) {
+  const closed = [...trades].filter(function(t){return getTradeResult(t)!=="Open";}).reverse();
   if (closed.length < 2) return null;
   const pts = [0]; let cum = 0;
   closed.forEach(function(t){ cum += calcR(t.pnl_dollars, rv); pts.push(parseFloat(cum.toFixed(2))); });
@@ -738,12 +748,12 @@ function EquityCurve({trades, rv}) {
           <div style={{textAlign:"right"}}>
             <div style={{fontSize:9,color:C.sub,marginBottom:2}}>Total R</div>
             <div style={{fontSize:16,fontWeight:700,color:lc}}>{fmtR(last)}</div>
-            <div style={{fontSize:11,color:lc,opacity:0.65}}>{fmtD(last*rv)}</div>
+            {!showOnlyR && <div style={{fontSize:11,color:lc,opacity:0.65}}>{fmtD(last*rv)}</div>}
           </div>
           <div style={{textAlign:"right"}}>
             <div style={{fontSize:9,color:C.sub,marginBottom:2}}>Max DD</div>
             <div style={{fontSize:16,fontWeight:700,color:C.red}}>{"-"+maxDD2.toFixed(2)+"R"}</div>
-            <div style={{fontSize:11,color:C.red,opacity:0.65}}>{"$"+Math.round(maxDD2*rv).toLocaleString()}</div>
+            {!showOnlyR && <div style={{fontSize:11,color:C.red,opacity:0.65}}>{"$"+Math.round(maxDD2*rv).toLocaleString()}</div>}
           </div>
         </div>
       </div>
@@ -940,11 +950,12 @@ function WeekStatsPanel({week, trades, rv}) {
 // WEEK CELL
 function WeekCell({weekTrades, rv, showOnlyR, selected, onClick}) {
   weekTrades = weekTrades || [];
-  const closed   = weekTrades.filter(function(t){ return t.result !== "Open"; });
+  const closed   = weekTrades.filter(function(t){ return getTradeResult(t) !== "Open"; });
   const totalPnl = closed.reduce(function(s,t){ return s+(t.pnl_dollars||0); }, 0);
   const r   = calcR(totalPnl, rv);
-  const wins = closed.filter(function(t){ return t.result === "Win"; }).length;
-  const wr  = closed.length ? wins / closed.length * 100 : 0;
+  const wins = closed.filter(function(t){ return getTradeResult(t) === "Win"; }).length;
+  const losses = closed.filter(function(t){ return getTradeResult(t) === "Loss"; }).length;
+  const wr  = wins + losses ? wins / (wins + losses) * 100 : 0;
   const isColored = closed.length && Math.abs(r) >= 0.01;
   const bg  = isColored ? dayBg(r) : C.card;
   const mainCol = isColored ? "#FFFFFF" : C.sub;
@@ -977,10 +988,11 @@ function CalendarioView({trades, rv, onImport, onExport, onTWImport, ohlcMeta, s
   trades.forEach(function(t){ if (!byDate[t.date]) byDate[t.date]=[]; byDate[t.date].push(t); });
   function dayStats(ds) {
     const dt = byDate[ds]; if (!dt || !dt.length) return null;
-    const closed = dt.filter(function(t){ return t.result !== "Open"; }); if (!closed.length) return null;
+    const closed = dt.filter(function(t){ return getTradeResult(t) !== "Open"; }); if (!closed.length) return null;
     const totalPnl = closed.reduce(function(s,t){ return s+(t.pnl_dollars||0); }, 0);
-    const wins = closed.filter(function(t){ return t.result === "Win"; }).length;
-    return { n: closed.length, totalPnl: totalPnl, wr: wins / closed.length * 100 };
+    const wins = closed.filter(function(t){ return getTradeResult(t) === "Win"; }).length;
+    const losses = closed.filter(function(t){ return getTradeResult(t) === "Loss"; }).length;
+    return { n: closed.length, totalPnl: totalPnl, wr: wins + losses ? wins / (wins + losses) * 100 : 0 };
   }
   const weeks = getCalendarWeeks(year, month);
   const weekRows = weeks.map(function(week){
@@ -1057,7 +1069,7 @@ function CalendarioView({trades, rv, onImport, onExport, onTWImport, ohlcMeta, s
 }
 
 // DASHBOARD
-function Dashboard({trades, rv, ohlcData, ohlcNQ}) {
+function Dashboard({trades, rv, ohlcData, ohlcNQ, showOnlyR, onToggleR}) {
   const m = calcStats(trades, rv);
   const mmStats = calcMaeMfeStats(trades, ohlcData, ohlcNQ);
   if (!m) return <div style={{textAlign:"center",padding:"60px 20px",color:C.sub,fontSize:13}}>Nessun trade. Importa il primo CSV dal tab Calendario.</div>;
@@ -1073,15 +1085,20 @@ function Dashboard({trades, rv, ohlcData, ohlcNQ}) {
   const effC = mmStats ? (mmStats.avgEff>=50?C.green:mmStats.avgEff>=30?C.gold:C.red) : C.sub;
   return (
     <div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:10}}>
-        <MetricCard label="Expectancy"    value={(m.ev>=0?"+":"")+m.ev.toFixed(2)+"R"}  sub={fmtD(m.ev*rv)}   color={evC}/>
-        <MetricCard label="Win Rate"      value={m.wr.toFixed(1)+"%"}                                          color={m.wr>=50?C.green:C.red}/>
-        <MetricCard label="Profit Factor" value={isFinite(m.pf)?m.pf.toFixed(2):"\u221E"}                    color={m.pf>=1?C.green:C.red}/>
-        <MetricCard label="Total R"       value={fmtR(m.totalR)}                         sub={fmtD(m.totalD)}  color={totC}/>
+      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
+        <button onClick={onToggleR} style={{padding:"6px 12px",background:showOnlyR?C.gold+"20":"transparent",border:"1px solid "+(showOnlyR?C.gold:C.border),borderRadius:20,color:showOnlyR?C.gold:C.sub,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.1em",fontWeight:showOnlyR?700:400}}>
+          {showOnlyR?"R":"R / $"}
+        </button>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:10}}>
-        <MetricCard label="Avg Win"           value={"+"+m.avgW.toFixed(2)+"R"} sub={fmtD(m.avgW*rv)} color={C.green}/>
-        <MetricCard label="Avg Loss"          value={m.avgL.toFixed(2)+"R"}     sub={fmtD(m.avgL*rv)} color={C.red}/>
+        <MetricCard label="Expectancy"    value={(m.ev>=0?"+":"")+m.ev.toFixed(2)+"R"}  sub={showOnlyR?null:fmtD(m.ev*rv)}   color={evC}/>
+        <MetricCard label="Win Rate"      value={m.wr.toFixed(1)+"%"}                                          color={m.wr>=50?C.green:C.red}/>
+        <MetricCard label="Profit Factor" value={isFinite(m.pf)?m.pf.toFixed(2):"\u221E"}                    color={m.pf>=1?C.green:C.red}/>
+        <MetricCard label="Total R"       value={fmtR(m.totalR)}                         sub={showOnlyR?null:fmtD(m.totalD)}  color={totC}/>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:10}}>
+        <MetricCard label="Avg Win"           value={"+"+m.avgW.toFixed(2)+"R"} sub={showOnlyR?null:fmtD(m.avgW*rv)} color={C.green}/>
+        <MetricCard label="Avg Loss"          value={m.avgL.toFixed(2)+"R"}     sub={showOnlyR?null:fmtD(m.avgL*rv)} color={C.red}/>
         <MetricCard label="Avg Duration Win"  value={fmtDur(m.avgDurW)}                               color={C.green}/>
         <MetricCard label="Avg Duration Loss" value={fmtDur(m.avgDurL)}                               color={C.red}/>
       </div>
@@ -1091,7 +1108,7 @@ function Dashboard({trades, rv, ohlcData, ohlcNQ}) {
         <MetricCard label="Max Streak Loss" value={String(m.maxConsecL)} sub="consecutivi" color={C.red}/>
         <MetricCard label="W / L / BE"      value={m.w+" / "+m.l+" / "+m.be} color={C.sub}/>
       </div>
-      <EquityCurve trades={trades} rv={rv}/>
+      <EquityCurve trades={trades} rv={rv} showOnlyR={showOnlyR}/>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
         <DonutChart w={m.w} l={m.l} be={m.be}/>
         <DailyPnlChart trades={trades} rv={rv}/>
@@ -1386,9 +1403,9 @@ function ImportModal({onClose, trades, setTrades}) {
     try{ await storage.set("jnl:v2:trades",JSON.stringify(newTrades)); }catch(e){}
     setSaving(false); onClose();
   }
-  const winsN   = parsed ? parsed.trades.filter(function(t){return t.result==="Win";}).length  : 0;
-  const lossesN = parsed ? parsed.trades.filter(function(t){return t.result==="Loss";}).length : 0;
-  const besN    = parsed ? parsed.trades.filter(function(t){return t.result==="BE";}).length   : 0;
+  const winsN   = parsed ? parsed.trades.filter(function(t){return getTradeResult(t)==="Win";}).length  : 0;
+  const lossesN = parsed ? parsed.trades.filter(function(t){return getTradeResult(t)==="Loss";}).length : 0;
+  const besN    = parsed ? parsed.trades.filter(function(t){return getTradeResult(t)==="BE";}).length   : 0;
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
       <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:12,padding:24,width:"100%",maxWidth:580}}>
@@ -1447,6 +1464,7 @@ function ExportModal({trades, rv, onClose}) {
   const rows = [...trades].reverse().map(function(t){
     return headers.map(function(h){
       if (h==="r")       return '"'+calcR(t.pnl_dollars||0,rv).toFixed(2)+'"';
+      if (h==="result")  return '"'+getTradeResult(t)+'"';
       if (h==="partial") return '"'+( t.partial?"Si":"No")+'"';
       return '"'+String(t[h]||"").replace(/"/g,'\'\'')+'"';
     }).join(",");
@@ -1597,7 +1615,7 @@ function Journal() {
           );
         })}
       </div>
-      {tab==="dashboard"   && <Dashboard      trades={trades} rv={rv} ohlcData={ohlcData} ohlcNQ={ohlcNQ}/>}
+      {tab==="dashboard"   && <Dashboard      trades={trades} rv={rv} ohlcData={ohlcData} ohlcNQ={ohlcNQ} showOnlyR={showOnlyR} onToggleR={toggleR}/>}
       {tab==="calendario"  && <CalendarioView  trades={trades} rv={rv} onImport={function(){setShowImport(true);}} onExport={function(){setShowExport(true);}} onTWImport={function(){setShowTWImport(true);}} ohlcMeta={ohlcMeta} showOnlyR={showOnlyR} onToggleR={toggleR}/>}
       {tab==="settimanale" && <SettimanaleView/>}
     </div>

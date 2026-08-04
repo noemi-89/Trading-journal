@@ -528,9 +528,15 @@ function groupBy(trades, fn, rv) {
 
 
 // DONUT WIN/LOSS/BE
-function DonutChart({w, l, be}) {
+function DonutChart({w, l, be, title}) {
   const total = w + l + be;
-  if (!total) return null;
+  const chartTitle = title || "Win / Loss / BE";
+  if (!total) return (
+    <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"16px 20px",marginBottom:14}}>
+      <div style={{fontSize:10,color:C.sub,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:14}}>{chartTitle}</div>
+      <div style={{height:120,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:C.muted}}>Nessun trade</div>
+    </div>
+  );
   const R = 46, cx = 60, cy = 60, sw = 15;
   const circ = 2 * Math.PI * R;
   const wP = w / total, lP = l / total, bP = be / total;
@@ -538,7 +544,7 @@ function DonutChart({w, l, be}) {
   const GAP = 0.025;
   return (
     <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"16px 20px",marginBottom:14}}>
-      <div style={{fontSize:10,color:C.sub,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:14}}>Win / Loss / BE</div>
+      <div style={{fontSize:10,color:C.sub,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:14}}>{chartTitle}</div>
       <div style={{display:"flex",alignItems:"center",gap:28}}>
         <svg width={120} height={120} viewBox="0 0 120 120" style={{flexShrink:0}}>
           <circle cx={cx} cy={cy} r={R} fill="none" stroke={C.muted} strokeWidth={sw}/>
@@ -571,44 +577,77 @@ function DonutChart({w, l, be}) {
   );
 }
 
-// DAILY P&L BAR CHART
-function DailyPnlChart({trades, rv}) {
-  const byDate = {};
-  trades.filter(function(t){return getTradeResult(t)!=="Open";}).forEach(function(t){
-    if (!byDate[t.date]) byDate[t.date]=0;
-    byDate[t.date]+=(t.pnl_dollars||0);
+function countResults(trades) {
+  const out = {w:0,l:0,be:0,n:0};
+  trades.forEach(function(t){
+    const res = getTradeResult(t);
+    if (res === "Open") return;
+    out.n++;
+    if (res === "Win") out.w++;
+    else if (res === "Loss") out.l++;
+    else out.be++;
   });
-  const days = Object.keys(byDate).sort();
-  if (days.length < 2) return null;
-  const vals = days.map(function(d){return calcR(byDate[d],rv);});
-  const maxAbs = Math.max.apply(null, vals.map(Math.abs).concat([0.1]));
-  const W=560,H=100,PAD=24,inner=W-PAD*2;
-  const slotW = inner/days.length;
-  const bW = Math.min(28, slotW-4);
-  const midY = PAD+H/2;
-  return(
-    <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"16px 20px",marginBottom:14}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-        <span style={{fontSize:10,color:C.sub,letterSpacing:"0.14em",textTransform:"uppercase"}}>Daily P&L</span>
-        <span style={{fontSize:10,color:C.sub}}>{days.length} giorni</span>
-      </div>
-      <svg viewBox={"0 0 "+W+" "+(H+PAD)} width="100%" style={{display:"block"}}>
-        <line x1={PAD} y1={midY} x2={W-PAD} y2={midY} stroke={C.border} strokeWidth="1"/>
-        {vals.map(function(v,i){
-          const x=PAD+i*slotW+(slotW-bW)/2;
-          const barH=Math.max(2, Math.abs(v)/maxAbs*(H/2-4));
-          const y=v>=0?midY-barH:midY;
-          const col=v>=0?C.green:C.red;
-          return(
-            <g key={i}>
-              <rect x={x} y={y} width={bW} height={barH} fill={col} rx="2" opacity="0.85"/>
-              {days.length<=20&&<text x={x+bW/2} y={H+PAD+12} fill={C.sub} fontSize="7" textAnchor="middle">{days[i].slice(5)}</text>}
+  return out;
+}
+function AssetDonut({title, subtitle, trades}) {
+  const c = countResults(trades);
+  const total = c.w + c.l + c.be;
+  const wr = calcWinRatePercent(c.w, c.l);
+  const R = 42, cx = 55, cy = 55, sw = 13;
+  const circ = 2 * Math.PI * R;
+  const wP = total ? c.w / total : 0;
+  const lP = total ? c.l / total : 0;
+  const bP = total ? c.be / total : 0;
+  const GAP = 0.025;
+  return (
+    <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:8,padding:"14px 16px",minHeight:156}}>
+      <div style={{fontSize:10,color:C.gold,letterSpacing:"0.12em",textTransform:"uppercase",fontWeight:700,marginBottom:2}}>{title}</div>
+      <div style={{fontSize:9,color:C.sub,letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:10}}>{subtitle}</div>
+      {total ? (
+        <div style={{display:"flex",alignItems:"center",gap:16}}>
+          <svg width={110} height={110} viewBox="0 0 110 110" style={{flexShrink:0}}>
+            <circle cx={cx} cy={cy} r={R} fill="none" stroke={C.muted} strokeWidth={sw}/>
+            <g transform={"rotate(-90 "+cx+" "+cy+")"}>
+              {wP>0&&<circle cx={cx} cy={cy} r={R} fill="none" stroke={C.green} strokeWidth={sw}
+                strokeDasharray={(circ*(wP-GAP)).toFixed(2)+" "+circ} strokeLinecap="butt"/>}
+              {lP>0&&<circle cx={cx} cy={cy} r={R} fill="none" stroke={C.red} strokeWidth={sw}
+                strokeDasharray={(circ*(lP-GAP)).toFixed(2)+" "+circ} strokeLinecap="butt"
+                transform={"rotate("+(wP*360).toFixed(2)+" "+cx+" "+cy+")"}/>}
+              {bP>0.01&&<circle cx={cx} cy={cy} r={R} fill="none" stroke={C.gold} strokeWidth={sw}
+                strokeDasharray={(circ*(bP-GAP*0.5)).toFixed(2)+" "+circ} strokeLinecap="butt"
+                transform={"rotate("+((wP+lP)*360).toFixed(2)+" "+cx+" "+cy+")"}/>}
             </g>
-          );
-        })}
-        <text x={PAD-4} y={PAD+8}   fill={C.sub} fontSize="8" textAnchor="end">{"+"+maxAbs.toFixed(1)+"R"}</text>
-        <text x={PAD-4} y={midY+H/2-4} fill={C.sub} fontSize="8" textAnchor="end">{"-"+maxAbs.toFixed(1)+"R"}</text>
-      </svg>
+            <text x={cx} y={cy-4} fill={C.text} fontSize="17" fontWeight="700" textAnchor="middle">{wr.toFixed(0)+"%"}</text>
+            <text x={cx} y={cy+11} fill={C.sub} fontSize="8" textAnchor="middle" letterSpacing="0.08em">WIN RATE</text>
+          </svg>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {[{label:"Win",val:c.w,col:C.green},{label:"Loss",val:c.l,col:C.red},{label:"BE",val:c.be,col:C.gold}].filter(function(item){return item.val>0;}).map(function(item){
+              return(
+                <div key={item.label} style={{display:"flex",alignItems:"center",gap:8}}>
+                  <div style={{width:9,height:9,borderRadius:2,background:item.col,flexShrink:0}}/>
+                  <span style={{fontSize:11,color:C.sub}}>{item.label}</span>
+                  <span style={{fontSize:17,fontWeight:700,color:item.col,marginLeft:3}}>{item.val}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <div style={{height:110,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:C.muted}}>Nessun trade</div>
+      )}
+    </div>
+  );
+}
+function AssetWinRateDonuts({trades}) {
+  const esTrades = trades.filter(function(t){ return productFamily(t) === "ES"; });
+  const nqTrades = trades.filter(function(t){ return productFamily(t) === "NQ"; });
+  return (
+    <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"16px 20px",marginBottom:14}}>
+      <div style={{fontSize:10,color:C.sub,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:14}}>Win rate per asset</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:12}}>
+        <AssetDonut title="S&P 500" subtitle="ES / MES" trades={esTrades}/>
+        <AssetDonut title="Nasdaq 100" subtitle="NQ / MNQ" trades={nqTrades}/>
+      </div>
     </div>
   );
 }
@@ -746,7 +785,7 @@ function EquityCurve({trades, rv, showOnlyR}) {
   return (
     <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"16px 20px",marginBottom:14}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-        <span style={{fontSize:12,color:C.text,letterSpacing:"0.11em",textTransform:"uppercase",fontWeight:700}}>{"Equity Curve - 1R = $"+rv}</span>
+        <span style={{fontSize:12,color:C.text,letterSpacing:"0.11em",textTransform:"uppercase",fontWeight:700}}>Equity Curve</span>
         <div style={{display:"flex",gap:24}}>
           <div style={{textAlign:"right"}}>
             <div style={{fontSize:9,color:C.sub,marginBottom:2}}>Total R</div>
@@ -1114,7 +1153,7 @@ function Dashboard({trades, rv, ohlcData, ohlcNQ, showOnlyR, onToggleR}) {
       <EquityCurve trades={trades} rv={rv} showOnlyR={showOnlyR}/>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
         <DonutChart w={m.w} l={m.l} be={m.be}/>
-        <DailyPnlChart trades={trades} rv={rv}/>
+        <AssetWinRateDonuts trades={trades}/>
       </div>
       {mmStats ? (
         <div style={{background:C.card,border:"1px solid "+C.blue+"40",borderRadius:10,padding:"16px 20px",marginBottom:14}}>

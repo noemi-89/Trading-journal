@@ -685,17 +685,24 @@ function executionRForExitPrice(trade, exitPrice) {
   if (dir === "sell" || dir === "short") return (entry - exit) / risk;
   return null;
 }
+function executionTradeShouldNotExist(review) {
+  return !!(review && (review.tradeShouldNotExist || review.deviationType === "Overtrading" || review.deviationType === "Trade That Should Not Exist"));
+}
 function deriveExecutionReview(review, trade) {
   const actualR = executionRForExitPrice(trade, trade && trade.exit_price);
   let planCompliantR = null;
   if (review && review.planCompliant === "YES") planCompliantR = actualR;
-  else if (review && review.planCompliant === "NO" && review.tradeShouldNotExist) planCompliantR = 0;
+  else if (review && review.planCompliant === "NO" && executionTradeShouldNotExist(review)) planCompliantR = 0;
   else if (review && review.planCompliant === "NO") planCompliantR = executionRForExitPrice(trade, review.planCompliantExitPrice);
   const executionImpact = actualR != null && planCompliantR != null ? actualR - planCompliantR : null;
+  const withoutInterventionR = review && review.planCompliant === "YES" ? executionRForExitPrice(trade, review.withoutInterventionExitPrice) : null;
+  const compliantDecisionValue = actualR != null && withoutInterventionR != null ? actualR - withoutInterventionR : null;
   return {
     actualR:actualR,
     planCompliantR:planCompliantR,
     executionImpact:executionImpact,
+    withoutInterventionR:withoutInterventionR,
+    compliantDecisionValue:compliantDecisionValue,
     initialRiskPoints:initialRiskPointsForTrade(trade),
     initialStop:initialStopInfoForTrade(trade),
   };
@@ -708,8 +715,10 @@ function calcExecutionReviewSummary(reviews, trades) {
     return { review:review, trade:trade, metrics:deriveExecutionReview(review, trade) };
   });
   const deviations = rows.filter(function(row){ return row.review.planCompliant === "NO"; });
+  const measuredCompliant = rows.filter(function(row){ return row.review.planCompliant === "YES" && row.metrics.compliantDecisionValue != null && isFinite(row.metrics.compliantDecisionValue); });
   const deviationDates = {};
   let harmful = 0; let beneficial = 0; let lost = 0; let gained = 0; let net = 0;
+  let helpfulCompliant = 0; let harmfulCompliant = 0; let compliantAdded = 0; let compliantLost = 0; let compliantNet = 0;
   deviations.forEach(function(row){
     if (row.trade && row.trade.date) deviationDates[row.trade.date] = true;
     const impact = row.metrics.executionImpact;
@@ -717,6 +726,12 @@ function calcExecutionReviewSummary(reviews, trades) {
     net += impact;
     if (impact < -0.0000001) { harmful++; lost += Math.abs(impact); }
     else if (impact > 0.0000001) { beneficial++; gained += impact; }
+  });
+  measuredCompliant.forEach(function(row){
+    const value = row.metrics.compliantDecisionValue;
+    compliantNet += value;
+    if (value > 0.0000001) { helpfulCompliant++; compliantAdded += value; }
+    else if (value < -0.0000001) { harmfulCompliant++; compliantLost += Math.abs(value); }
   });
   return {
     rows:rows,
@@ -729,6 +744,12 @@ function calcExecutionReviewSummary(reviews, trades) {
     totalRLost:lost,
     totalRGained:gained,
     netExecutionImpact:net,
+    measuredCompliantDecisions:measuredCompliant.length,
+    helpfulCompliantDecisions:helpfulCompliant,
+    harmfulCompliantDecisions:harmfulCompliant,
+    compliantRAdded:compliantAdded,
+    compliantRLost:compliantLost,
+    netCompliantDecisionValue:compliantNet,
   };
 }
 function formatExecutionDate(dateStr) {
@@ -2191,6 +2212,7 @@ function newExecutionReviewForm() {
     decisionNote:"",
     tradeShouldNotExist:false,
     planCompliantExitPrice:"",
+    withoutInterventionExitPrice:"",
   };
 }
 function ExecutionReviewView({trades, onOpenInitialStop}) {
@@ -2233,6 +2255,7 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
         next.tradeShouldNotExist = false;
         next.planCompliantExitPrice = "";
       }
+      if (key === "planCompliant" && value === "NO") next.withoutInterventionExitPrice = "";
       if (key === "tradeShouldNotExist" && value) next.planCompliantExitPrice = "";
       return next;
     });
@@ -2258,6 +2281,7 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
       decisionNote:review.decisionNote || "",
       tradeShouldNotExist:!!review.tradeShouldNotExist,
       planCompliantExitPrice:review.planCompliantExitPrice == null ? "" : String(review.planCompliantExitPrice),
+      withoutInterventionExitPrice:review.withoutInterventionExitPrice == null ? "" : String(review.withoutInterventionExitPrice),
     });
     setFormError("");
     setFormOpen(true);
@@ -2270,10 +2294,12 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
     if (form.planCompliant === "NO" && !form.deviationType) { setFormError("Deviation Type is required."); return; }
     if (form.planCompliant === "NO" && !form.reason) { setFormError("Reason is required."); return; }
     const planExit = parseOptionalPrice(form.planCompliantExitPrice);
-    if (form.planCompliant === "NO" && !form.tradeShouldNotExist && planExit == null) {
+    const forcedNoTrade = executionTradeShouldNotExist(form);
+    if (form.planCompliant === "NO" && !forcedNoTrade && planExit == null) {
       setFormError("Plan-Compliant Exit is required unless the trade should not have existed.");
       return;
     }
+    const withoutInterventionExit = parseOptionalPrice(form.withoutInterventionExitPrice);
     if (!editingId && reviews.some(function(review){ return review.linkedTradeId === linkedTrade.id; })) {
       setFormError("This trade already has an Execution Review. Edit the existing review.");
       return;
@@ -2291,8 +2317,9 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
       deviationType:form.planCompliant === "NO" ? form.deviationType : "",
       reason:form.reason,
       decisionNote:String(form.decisionNote || "").trim(),
-      tradeShouldNotExist:form.planCompliant === "NO" && !!form.tradeShouldNotExist,
-      planCompliantExitPrice:form.planCompliant === "NO" && !form.tradeShouldNotExist ? planExit : null,
+      tradeShouldNotExist:form.planCompliant === "NO" && forcedNoTrade,
+      planCompliantExitPrice:form.planCompliant === "NO" && !forcedNoTrade ? planExit : null,
+      withoutInterventionExitPrice:form.planCompliant === "YES" ? withoutInterventionExit : null,
     };
     const next = editingId
       ? reviews.map(function(review){ return review.id === editingId ? record : review; })
@@ -2317,11 +2344,11 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
 
   const tradeMap = {};
   (trades || []).forEach(function(trade){ if (trade && trade.id) tradeMap[trade.id] = trade; });
-  const summary = calcExecutionReviewSummary(reviews, trades);
+  const allSummary = calcExecutionReviewSummary(reviews, trades);
   const instrumentSet = {};
-  summary.rows.forEach(function(row){ if (row.trade && row.trade.product) instrumentSet[row.trade.product] = true; });
+  allSummary.rows.forEach(function(row){ if (row.trade && row.trade.product) instrumentSet[row.trade.product] = true; });
   const instruments = Object.keys(instrumentSet).sort();
-  let visibleRows = summary.rows.slice();
+  let visibleRows = allSummary.rows.slice();
   visibleRows.sort(function(a,b){
     const ak = a.trade ? executionTradeSortKey(a.trade) : String(a.review.createdAt || "");
     const bk = b.trade ? executionTradeSortKey(b.trade) : String(b.review.createdAt || "");
@@ -2336,6 +2363,7 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
     if (filters.to && (!row.trade || row.trade.date > filters.to)) return false;
     return true;
   });
+  const summary = calcExecutionReviewSummary(visibleRows.map(function(row){ return row.review; }), trades);
 
   const reviewedTradeIds = {};
   reviews.forEach(function(review){ if (review.id !== editingId) reviewedTradeIds[review.linkedTradeId] = true; });
@@ -2354,6 +2382,14 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
     {label:"Total R Lost",value:summary.totalRLost.toFixed(2)+"R",color:C.red},
     {label:"Total R Gained",value:fmtR(summary.totalRGained),color:C.green},
     {label:"Net Execution Impact",value:fmtR(summary.netExecutionImpact),color:summary.netExecutionImpact < 0 ? C.red : summary.netExecutionImpact > 0 ? C.green : C.sub},
+  ];
+  const compliantDecisionCards = [
+    {label:"Measured Decisions",value:String(summary.measuredCompliantDecisions),color:C.text},
+    {label:"Helpful Decisions",value:String(summary.helpfulCompliantDecisions),color:C.green},
+    {label:"Harmful Decisions",value:String(summary.harmfulCompliantDecisions),color:C.red},
+    {label:"R Added",value:fmtR(summary.compliantRAdded),color:C.green},
+    {label:"R Lost",value:summary.compliantRLost.toFixed(2)+"R",color:C.red},
+    {label:"Net Decision Value",value:fmtR(summary.netCompliantDecisionValue),color:summary.netCompliantDecisionValue < 0 ? C.red : summary.netCompliantDecisionValue > 0 ? C.green : C.sub},
   ];
   function ReviewMetric({label, value, color}) {
     return (
@@ -2380,6 +2416,18 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
 
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(145px,1fr))",gap:8,marginBottom:16}}>
         {summaryCards.map(function(card){
+          return (
+            <div key={card.label} style={{background:C.card,border:"1px solid "+C.border,borderRadius:6,padding:"13px 14px",minHeight:74}}>
+              <div style={{fontSize:9,color:C.sub,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:8,lineHeight:1.35}}>{card.label}</div>
+              <div style={{fontSize:20,color:card.color,fontWeight:700}}>{card.value}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{fontSize:10,color:C.green,letterSpacing:"0.1em",textTransform:"uppercase",fontWeight:700,margin:"2px 0 8px"}}>Plan-Compliant Decision Value</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(145px,1fr))",gap:8,marginBottom:16}}>
+        {compliantDecisionCards.map(function(card){
           return (
             <div key={card.label} style={{background:C.card,border:"1px solid "+C.border,borderRadius:6,padding:"13px 14px",minHeight:74}}>
               <div style={{fontSize:9,color:C.sub,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:8,lineHeight:1.35}}>{card.label}</div>
@@ -2427,7 +2475,9 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
       <div style={{display:"grid",gap:10}}>
         {visibleRows.map(function(row){
           const review = row.review; const trade = row.trade; const metrics = row.metrics;
-          const impactColor = metrics.executionImpact == null ? C.sub : metrics.executionImpact < 0 ? C.red : metrics.executionImpact > 0 ? C.green : C.sub;
+          const isCompliant = review.planCompliant === "YES";
+          const displayedImpact = isCompliant ? metrics.compliantDecisionValue : metrics.executionImpact;
+          const impactColor = displayedImpact == null ? C.sub : displayedImpact < 0 ? C.red : displayedImpact > 0 ? C.green : C.sub;
           return (
             <div key={review.id} style={{background:C.card,border:"1px solid "+(review.planCompliant === "NO" ? C.red+"55" : C.border),borderRadius:7,padding:"16px 18px"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:14,flexWrap:"wrap"}}>
@@ -2449,8 +2499,8 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
               </div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:14,borderTop:"1px solid "+C.border,marginTop:14,paddingTop:13}}>
                 <ReviewMetric label="Actual R" value={fmtR(metrics.actualR)} color={metrics.actualR == null ? C.sub : metrics.actualR < 0 ? C.red : C.green}/>
-                <ReviewMetric label="Plan-Compliant R" value={fmtR(metrics.planCompliantR)} color={metrics.planCompliantR == null ? C.sub : metrics.planCompliantR < 0 ? C.red : C.green}/>
-                <ReviewMetric label="Execution Impact" value={fmtR(metrics.executionImpact)} color={impactColor}/>
+                <ReviewMetric label={isCompliant ? "Without-Intervention R" : "Plan-Compliant R"} value={fmtR(isCompliant ? metrics.withoutInterventionR : metrics.planCompliantR)} color={(isCompliant ? metrics.withoutInterventionR : metrics.planCompliantR) == null ? C.sub : (isCompliant ? metrics.withoutInterventionR : metrics.planCompliantR) < 0 ? C.red : C.green}/>
+                <ReviewMetric label={isCompliant ? "Decision Value" : "Execution Impact"} value={fmtR(displayedImpact)} color={impactColor}/>
                 <ReviewMetric label="Initial SL" value={metrics.initialStop.price == null ? "Required" : String(metrics.initialStop.price)} color={metrics.initialStop.price == null ? C.gold : C.text}/>
               </div>
               {metrics.initialRiskPoints == null && trade && (
@@ -2532,14 +2582,17 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
                   <option value="">Select...</option>{EXECUTION_REASON_OPTIONS.map(function(item){return <option key={item} value={item}>{item}</option>;})}
                 </select>
               </div>
-              {form.planCompliant === "NO" && !form.tradeShouldNotExist && (
+              {form.planCompliant === "NO" && !executionTradeShouldNotExist(form) && (
                 <div><span style={labelStyle}>Plan-Compliant Exit</span><input type="number" step="any" value={form.planCompliantExitPrice} onChange={function(e){updateForm("planCompliantExitPrice",e.target.value);}} style={inputStyle}/></div>
+              )}
+              {form.planCompliant === "YES" && (
+                <div><span style={labelStyle}>Without-Intervention Exit Price</span><input type="number" step="any" value={form.withoutInterventionExitPrice} onChange={function(e){updateForm("withoutInterventionExitPrice",e.target.value);}} style={inputStyle}/></div>
               )}
             </div>
 
             {form.planCompliant === "NO" && (
-              <label style={{display:"flex",alignItems:"center",gap:9,borderTop:"1px solid "+C.border,borderBottom:"1px solid "+C.border,padding:"11px 2px",marginBottom:14,cursor:"pointer",fontSize:11,color:form.tradeShouldNotExist?C.red:C.text}}>
-                <input type="checkbox" checked={form.tradeShouldNotExist} onChange={function(e){updateForm("tradeShouldNotExist",e.target.checked);}}/>
+              <label style={{display:"flex",alignItems:"center",gap:9,borderTop:"1px solid "+C.border,borderBottom:"1px solid "+C.border,padding:"11px 2px",marginBottom:14,cursor:executionTradeShouldNotExist({deviationType:form.deviationType})?"default":"pointer",fontSize:11,color:executionTradeShouldNotExist(form)?C.red:C.text}}>
+                <input type="checkbox" checked={executionTradeShouldNotExist(form)} disabled={executionTradeShouldNotExist({deviationType:form.deviationType})} onChange={function(e){updateForm("tradeShouldNotExist",e.target.checked);}}/>
                 This trade should not have existed (Plan-Compliant R = 0R)
               </label>
             )}
@@ -2552,8 +2605,8 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
             {selectedTrade && (
               <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:12,borderTop:"1px solid "+C.border,borderBottom:"1px solid "+C.border,padding:"14px 0",marginBottom:14}}>
                 <ReviewMetric label="Actual R" value={fmtR(preview.actualR)} color={preview.actualR == null?C.sub:preview.actualR<0?C.red:C.green}/>
-                <ReviewMetric label="Plan-Compliant R" value={fmtR(preview.planCompliantR)} color={preview.planCompliantR == null?C.sub:preview.planCompliantR<0?C.red:C.green}/>
-                <ReviewMetric label="Execution Impact" value={fmtR(preview.executionImpact)} color={preview.executionImpact == null?C.sub:preview.executionImpact<0?C.red:preview.executionImpact>0?C.green:C.sub}/>
+                <ReviewMetric label={form.planCompliant === "YES" ? "Without-Intervention R" : "Plan-Compliant R"} value={fmtR(form.planCompliant === "YES" ? preview.withoutInterventionR : preview.planCompliantR)} color={(form.planCompliant === "YES" ? preview.withoutInterventionR : preview.planCompliantR) == null?C.sub:(form.planCompliant === "YES" ? preview.withoutInterventionR : preview.planCompliantR)<0?C.red:C.green}/>
+                <ReviewMetric label={form.planCompliant === "YES" ? "Decision Value" : "Execution Impact"} value={fmtR(form.planCompliant === "YES" ? preview.compliantDecisionValue : preview.executionImpact)} color={(form.planCompliant === "YES" ? preview.compliantDecisionValue : preview.executionImpact) == null?C.sub:(form.planCompliant === "YES" ? preview.compliantDecisionValue : preview.executionImpact)<0?C.red:(form.planCompliant === "YES" ? preview.compliantDecisionValue : preview.executionImpact)>0?C.green:C.sub}/>
               </div>
             )}
             {formError && <div style={{background:C.red+"12",border:"1px solid "+C.red+"60",borderRadius:4,color:C.red,fontSize:11,padding:"9px 11px",marginBottom:12}}>{formError}</div>}

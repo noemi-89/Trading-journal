@@ -52,6 +52,7 @@ vm.runInContext([
   "initialStopInfoForTrade",
   "initialRiskPointsForTrade",
   "executionRForExitPrice",
+  "executionTradeShouldNotExist",
   "deriveExecutionReview",
   "calcExecutionReviewSummary",
 ].map(extractFunction).join("\n"), context);
@@ -161,6 +162,7 @@ function testPlanCompliantExcludedFromDeviationTotals() {
   approx(summary.totalRLost, 0, "compliant lost total");
   approx(summary.totalRGained, 0, "compliant gained total");
   approx(summary.netExecutionImpact, 0, "compliant net total");
+  assert.strictEqual(summary.measuredCompliantDecisions, 0);
 }
 function testInitialStopEditRecalculates() {
   const trade = makeTrade("stop-edit", "2026-08-22", "Buy", 100, 90, 110);
@@ -182,6 +184,66 @@ function testNoMfeDependency() {
   const after = context.deriveExecutionReview(review, trade);
   assert.deepStrictEqual(after, before);
 }
+function testHelpfulCompliantDecisionLong() {
+  const trade = makeTrade("helpful-long", "2026-08-23", "Buy", 100, 90, 105);
+  const review = makeReview("r13", trade.id, {planCompliant:"YES", planCompliantExitPrice:null, withoutInterventionExitPrice:80});
+  const result = context.deriveExecutionReview(review, trade);
+  approx(result.actualR, 0.5, "helpful long actual R");
+  approx(result.withoutInterventionR, -2, "helpful long without intervention R");
+  approx(result.compliantDecisionValue, 2.5, "helpful long decision value");
+  approx(result.executionImpact, 0, "helpful long deviation impact");
+}
+function testHelpfulCompliantDecisionShort() {
+  const trade = makeTrade("helpful-short", "2026-08-23", "Sell", 100, 110, 95);
+  const review = makeReview("r14", trade.id, {planCompliant:"YES", planCompliantExitPrice:null, withoutInterventionExitPrice:120});
+  const result = context.deriveExecutionReview(review, trade);
+  approx(result.actualR, 0.5, "helpful short actual R");
+  approx(result.withoutInterventionR, -2, "helpful short without intervention R");
+  approx(result.compliantDecisionValue, 2.5, "helpful short decision value");
+}
+function testCompliantDecisionSummary() {
+  const helpfulTrade = makeTrade("summary-help", "2026-08-23", "Buy", 100, 90, 105);
+  const harmfulTrade = makeTrade("summary-harm", "2026-08-24", "Buy", 100, 90, 105);
+  const reviews = [
+    makeReview("r15", helpfulTrade.id, {planCompliant:"YES", withoutInterventionExitPrice:80}),
+    makeReview("r16", harmfulTrade.id, {planCompliant:"YES", withoutInterventionExitPrice:115}),
+  ];
+  const summary = context.calcExecutionReviewSummary(reviews, [helpfulTrade,harmfulTrade]);
+  assert.strictEqual(summary.measuredCompliantDecisions, 2);
+  assert.strictEqual(summary.helpfulCompliantDecisions, 1);
+  assert.strictEqual(summary.harmfulCompliantDecisions, 1);
+  approx(summary.compliantRAdded, 2.5, "compliant R added");
+  approx(summary.compliantRLost, 1, "compliant R lost");
+  approx(summary.netCompliantDecisionValue, 1.5, "net compliant decision value");
+  assert.strictEqual(summary.harmfulDeviations, 0);
+  assert.strictEqual(summary.beneficialDeviations, 0);
+}
+function testCompliantDecisionMissingStop() {
+  const trade = makeTrade("compliant-missing-stop", "2026-08-23", "Buy", 100, null, 105);
+  delete trade.initial_stop_price;
+  const review = makeReview("r17", trade.id, {planCompliant:"YES", withoutInterventionExitPrice:80});
+  const result = context.deriveExecutionReview(review, trade);
+  assert.strictEqual(result.actualR, null);
+  assert.strictEqual(result.withoutInterventionR, null);
+  assert.strictEqual(result.compliantDecisionValue, null);
+}
+function testCompliantDecisionReactsToInitialStopEdit() {
+  const trade = makeTrade("compliant-stop-edit", "2026-08-23", "Buy", 100, 90, 105);
+  const review = makeReview("r18", trade.id, {planCompliant:"YES", withoutInterventionExitPrice:80});
+  const before = context.deriveExecutionReview(review, trade);
+  trade.initial_stop_price = 95;
+  const after = context.deriveExecutionReview(review, trade);
+  approx(before.compliantDecisionValue, 2.5, "compliant value before stop edit");
+  approx(after.compliantDecisionValue, 5, "compliant value after stop edit");
+}
+function testOvertradingNeverShouldExist() {
+  const trade = makeTrade("overtrading", "2026-08-23", "Buy", 100, 90, 115);
+  const review = makeReview("r19", trade.id, {deviationType:"Overtrading", tradeShouldNotExist:false, planCompliantExitPrice:120});
+  const result = context.deriveExecutionReview(review, trade);
+  assert.strictEqual(context.executionTradeShouldNotExist(review), true);
+  approx(result.planCompliantR, 0, "overtrading plan R");
+  approx(result.executionImpact, 1.5, "overtrading winner impact");
+}
 
 testLongEarlyExit();
 testShortEarlyExit();
@@ -195,5 +257,11 @@ testDeviationDaysDifferentDates();
 testPlanCompliantExcludedFromDeviationTotals();
 testInitialStopEditRecalculates();
 testNoMfeDependency();
+testHelpfulCompliantDecisionLong();
+testHelpfulCompliantDecisionShort();
+testCompliantDecisionSummary();
+testCompliantDecisionMissingStop();
+testCompliantDecisionReactsToInitialStopEdit();
+testOvertradingNeverShouldExist();
 
 console.log("OK - Execution Review tests passed");

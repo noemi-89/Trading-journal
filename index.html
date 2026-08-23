@@ -59,6 +59,11 @@ const FASCIA_LIST= [
 const FASCIA_MAP = {};
 FASCIA_LIST.forEach(function(item){ FASCIA_MAP[item.key] = item.col; });
 const BE_THRESHOLD_DOLLARS = 150;
+const EXECUTION_REVIEWS_KEY = "jnl:v2:execution_reviews";
+const EXIT_PLAN_OPTIONS = ["Fixed Target","Target + Reassess","Expansion / Trail"];
+const EXIT_MECHANISM_OPTIONS = ["Target Hit","BE Stop","Protected Stop","Trailing Stop","Manual Exit","Other"];
+const DEVIATION_TYPE_OPTIONS = ["Early Exit","Premature Stop Tightening","Stop Modification","Target Modification","Entry Outside Plan","Overtrading","Trade That Should Not Exist","Late Exit","Emotional / Manual Exit","Other"];
+const EXECUTION_REASON_OPTIONS = ["Fatigue","Fear","FOMO","Frustration","Revenge","Impatience","Doubt","Probable Invalidation","Loss of Confidence","Other"];
 
 const SEED = [
   { id:"s01",date:"2026-05-16",entry_time:"13:45",exit_time:"14:15",duration:30, direction:"Buy", entry_price:7520,  exit_price:7504,   pnl_dollars:-800, result:"Loss",notes:"",partial:false,product:"ES" },
@@ -669,6 +674,75 @@ function initialRiskUsdForTrade(trade) {
   const pointValue = pointValueForTrade(trade);
   const qty = quantityForMaeMfe(trade);
   return riskPoints && pointValue && qty ? riskPoints * pointValue * qty : null;
+}
+function executionRForExitPrice(trade, exitPrice) {
+  const entry = parseOptionalPrice(trade && trade.entry_price);
+  const exit = parseOptionalPrice(exitPrice);
+  const risk = initialRiskPointsForTrade(trade);
+  if (entry == null || exit == null || risk == null) return null;
+  const dir = String(trade && trade.direction || "").toLowerCase();
+  if (dir === "buy" || dir === "long") return (exit - entry) / risk;
+  if (dir === "sell" || dir === "short") return (entry - exit) / risk;
+  return null;
+}
+function deriveExecutionReview(review, trade) {
+  const actualR = executionRForExitPrice(trade, trade && trade.exit_price);
+  let planCompliantR = null;
+  if (review && review.planCompliant === "YES") planCompliantR = actualR;
+  else if (review && review.planCompliant === "NO" && review.tradeShouldNotExist) planCompliantR = 0;
+  else if (review && review.planCompliant === "NO") planCompliantR = executionRForExitPrice(trade, review.planCompliantExitPrice);
+  const executionImpact = actualR != null && planCompliantR != null ? actualR - planCompliantR : null;
+  return {
+    actualR:actualR,
+    planCompliantR:planCompliantR,
+    executionImpact:executionImpact,
+    initialRiskPoints:initialRiskPointsForTrade(trade),
+    initialStop:initialStopInfoForTrade(trade),
+  };
+}
+function calcExecutionReviewSummary(reviews, trades) {
+  const tradeMap = {};
+  (trades || []).forEach(function(trade){ if (trade && trade.id) tradeMap[trade.id] = trade; });
+  const rows = (reviews || []).map(function(review){
+    const trade = tradeMap[review.linkedTradeId] || null;
+    return { review:review, trade:trade, metrics:deriveExecutionReview(review, trade) };
+  });
+  const deviations = rows.filter(function(row){ return row.review.planCompliant === "NO"; });
+  const deviationDates = {};
+  let harmful = 0; let beneficial = 0; let lost = 0; let gained = 0; let net = 0;
+  deviations.forEach(function(row){
+    if (row.trade && row.trade.date) deviationDates[row.trade.date] = true;
+    const impact = row.metrics.executionImpact;
+    if (impact == null || !isFinite(impact)) return;
+    net += impact;
+    if (impact < -0.0000001) { harmful++; lost += Math.abs(impact); }
+    else if (impact > 0.0000001) { beneficial++; gained += impact; }
+  });
+  return {
+    rows:rows,
+    deviationDays:Object.keys(deviationDates).length,
+    reviewedTrades:rows.length,
+    nonCompliantReviews:deviations.length,
+    compliantReviews:rows.filter(function(row){ return row.review.planCompliant === "YES"; }).length,
+    harmfulDeviations:harmful,
+    beneficialDeviations:beneficial,
+    totalRLost:lost,
+    totalRGained:gained,
+    netExecutionImpact:net,
+  };
+}
+function formatExecutionDate(dateStr) {
+  const p = String(dateStr || "").split("-");
+  return p.length === 3 ? p[2] + "/" + p[1] + "/" + p[0] : String(dateStr || "-");
+}
+function executionTradeSortKey(trade) {
+  return String(trade && trade.date || "") + " " + String(trade && trade.entry_time || "");
+}
+function executionTradeLabel(trade) {
+  if (!trade) return "Trade unavailable";
+  const prices = parseOptionalPrice(trade.entry_price) != null && parseOptionalPrice(trade.exit_price) != null
+    ? " | " + trade.entry_price + " > " + trade.exit_price : "";
+  return formatExecutionDate(trade.date) + " | " + (trade.product || "-") + " | " + (trade.entry_time || "-") + " > " + (trade.exit_time || "-") + prices;
 }
 function isMaeMfePartialAmbiguous(trade) {
   if (!trade || !trade.partial) return false;
@@ -2105,6 +2179,396 @@ function WeeklyPlaybookView() {
   );
 }
 
+// EXECUTION REVIEW / PLAN DEVIATIONS
+function newExecutionReviewForm() {
+  return {
+    linkedTradeId:"",
+    exitPlan:"",
+    exitMechanism:"",
+    planCompliant:"",
+    deviationType:"",
+    reason:"",
+    decisionNote:"",
+    tradeShouldNotExist:false,
+    planCompliantExitPrice:"",
+  };
+}
+function ExecutionReviewView({trades, onOpenInitialStop}) {
+  const [reviews, setReviews] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState(newExecutionReviewForm());
+  const [selectorDate, setSelectorDate] = useState("");
+  const [formError, setFormError] = useState("");
+  const [flash, setFlash] = useState("");
+  const [filters, setFilters] = useState({compliance:"ALL",instrument:"ALL",deviation:"ALL",reason:"ALL",from:"",to:""});
+
+  useEffect(function(){
+    (async function(){
+      try {
+        const stored = await storage.get(EXECUTION_REVIEWS_KEY);
+        const parsed = stored ? JSON.parse(stored.value) : [];
+        setReviews(Array.isArray(parsed) ? parsed : []);
+      } catch(e) { setReviews([]); }
+      setLoaded(true);
+    })();
+  }, []);
+
+  async function persistReviews(next, message) {
+    setReviews(next);
+    try {
+      await storage.set(EXECUTION_REVIEWS_KEY, JSON.stringify(next));
+      setFlash(message || "Saved");
+      setTimeout(function(){ setFlash(""); }, 1800);
+    } catch(e) { setFlash("Save error"); }
+  }
+  function updateForm(key, value) {
+    setForm(function(prev){
+      const next = {};
+      Object.keys(prev).forEach(function(k){ next[k] = prev[k]; });
+      next[key] = value;
+      if (key === "planCompliant" && value === "YES") {
+        next.deviationType = "";
+        next.tradeShouldNotExist = false;
+        next.planCompliantExitPrice = "";
+      }
+      if (key === "tradeShouldNotExist" && value) next.planCompliantExitPrice = "";
+      return next;
+    });
+    setFormError("");
+  }
+  function openAdd() {
+    setEditingId(null);
+    setForm(newExecutionReviewForm());
+    setSelectorDate("");
+    setFormError("");
+    setFormOpen(true);
+  }
+  function openEdit(review) {
+    setEditingId(review.id);
+    setSelectorDate("");
+    setForm({
+      linkedTradeId:review.linkedTradeId || "",
+      exitPlan:review.exitPlan || "",
+      exitMechanism:review.exitMechanism || "",
+      planCompliant:review.planCompliant || "",
+      deviationType:review.deviationType || "",
+      reason:review.reason || "",
+      decisionNote:review.decisionNote || "",
+      tradeShouldNotExist:!!review.tradeShouldNotExist,
+      planCompliantExitPrice:review.planCompliantExitPrice == null ? "" : String(review.planCompliantExitPrice),
+    });
+    setFormError("");
+    setFormOpen(true);
+  }
+  async function saveForm(openStopAfter) {
+    const linkedTrade = (trades || []).find(function(trade){ return trade.id === form.linkedTradeId; });
+    if (!linkedTrade) { setFormError("Select a valid trade."); return; }
+    if (!form.exitPlan) { setFormError("Exit Plan is required."); return; }
+    if (form.planCompliant !== "YES" && form.planCompliant !== "NO") { setFormError("Plan Compliant is required."); return; }
+    if (form.planCompliant === "NO" && !form.deviationType) { setFormError("Deviation Type is required."); return; }
+    if (form.planCompliant === "NO" && !form.reason) { setFormError("Reason is required."); return; }
+    const planExit = parseOptionalPrice(form.planCompliantExitPrice);
+    if (form.planCompliant === "NO" && !form.tradeShouldNotExist && planExit == null) {
+      setFormError("Plan-Compliant Exit is required unless the trade should not have existed.");
+      return;
+    }
+    if (!editingId && reviews.some(function(review){ return review.linkedTradeId === linkedTrade.id; })) {
+      setFormError("This trade already has an Execution Review. Edit the existing review.");
+      return;
+    }
+    const previous = editingId ? reviews.find(function(review){ return review.id === editingId; }) : null;
+    const now = new Date().toISOString();
+    const record = {
+      id:editingId || ("execution_review_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7)),
+      linkedTradeId:linkedTrade.id,
+      createdAt:previous && previous.createdAt ? previous.createdAt : now,
+      updatedAt:now,
+      exitPlan:form.exitPlan,
+      exitMechanism:form.exitMechanism,
+      planCompliant:form.planCompliant,
+      deviationType:form.planCompliant === "NO" ? form.deviationType : "",
+      reason:form.reason,
+      decisionNote:String(form.decisionNote || "").trim(),
+      tradeShouldNotExist:form.planCompliant === "NO" && !!form.tradeShouldNotExist,
+      planCompliantExitPrice:form.planCompliant === "NO" && !form.tradeShouldNotExist ? planExit : null,
+    };
+    const next = editingId
+      ? reviews.map(function(review){ return review.id === editingId ? record : review; })
+      : [record].concat(reviews);
+    await persistReviews(next, editingId ? "Review updated" : "Review added");
+    setFormOpen(false);
+    setEditingId(null);
+    if (openStopAfter && onOpenInitialStop) onOpenInitialStop(linkedTrade.id);
+  }
+  async function deleteReview(review) {
+    if (!window.confirm("Delete this Execution Review? The original trade will not be deleted.")) return;
+    await persistReviews(reviews.filter(function(item){ return item.id !== review.id; }), "Review deleted");
+  }
+  function setFilter(key, value) {
+    setFilters(function(prev){
+      const next = {};
+      Object.keys(prev).forEach(function(k){ next[k] = prev[k]; });
+      next[key] = value;
+      return next;
+    });
+  }
+
+  const tradeMap = {};
+  (trades || []).forEach(function(trade){ if (trade && trade.id) tradeMap[trade.id] = trade; });
+  const summary = calcExecutionReviewSummary(reviews, trades);
+  const instrumentSet = {};
+  summary.rows.forEach(function(row){ if (row.trade && row.trade.product) instrumentSet[row.trade.product] = true; });
+  const instruments = Object.keys(instrumentSet).sort();
+  let visibleRows = summary.rows.slice();
+  visibleRows.sort(function(a,b){
+    const ak = a.trade ? executionTradeSortKey(a.trade) : String(a.review.createdAt || "");
+    const bk = b.trade ? executionTradeSortKey(b.trade) : String(b.review.createdAt || "");
+    return bk.localeCompare(ak);
+  });
+  visibleRows = visibleRows.filter(function(row){
+    if (filters.compliance !== "ALL" && row.review.planCompliant !== filters.compliance) return false;
+    if (filters.instrument !== "ALL" && (!row.trade || row.trade.product !== filters.instrument)) return false;
+    if (filters.deviation !== "ALL" && row.review.deviationType !== filters.deviation) return false;
+    if (filters.reason !== "ALL" && row.review.reason !== filters.reason) return false;
+    if (filters.from && (!row.trade || row.trade.date < filters.from)) return false;
+    if (filters.to && (!row.trade || row.trade.date > filters.to)) return false;
+    return true;
+  });
+
+  const reviewedTradeIds = {};
+  reviews.forEach(function(review){ if (review.id !== editingId) reviewedTradeIds[review.linkedTradeId] = true; });
+  const selectableTrades = (trades || []).filter(function(trade){
+    return trade && trade.id && getTradeResult(trade) !== "Open" && !reviewedTradeIds[trade.id] && (!selectorDate || trade.date === selectorDate);
+  }).sort(function(a,b){ return executionTradeSortKey(b).localeCompare(executionTradeSortKey(a)); });
+  const selectedTrade = tradeMap[form.linkedTradeId] || null;
+  const preview = deriveExecutionReview(form, selectedTrade);
+  const inputStyle = {width:"100%",background:C.panel,border:"1px solid "+C.border,borderRadius:4,color:C.text,fontSize:12,padding:"10px 11px",fontFamily:"inherit",outline:"none",boxSizing:"border-box"};
+  const labelStyle = {display:"block",fontSize:10,color:C.sub,letterSpacing:"0.11em",textTransform:"uppercase",fontWeight:700,marginBottom:7};
+  const summaryCards = [
+    {label:"Deviation Days",value:String(summary.deviationDays),color:C.gold},
+    {label:"Reviewed Trades",value:String(summary.reviewedTrades),color:C.text},
+    {label:"Harmful Deviations",value:String(summary.harmfulDeviations),color:C.red},
+    {label:"Beneficial Deviations",value:String(summary.beneficialDeviations),color:C.green},
+    {label:"Total R Lost",value:summary.totalRLost.toFixed(2)+"R",color:C.red},
+    {label:"Total R Gained",value:fmtR(summary.totalRGained),color:C.green},
+    {label:"Net Execution Impact",value:fmtR(summary.netExecutionImpact),color:summary.netExecutionImpact < 0 ? C.red : summary.netExecutionImpact > 0 ? C.green : C.sub},
+  ];
+  function ReviewMetric({label, value, color}) {
+    return (
+      <div style={{minWidth:120}}>
+        <div style={{fontSize:9,color:C.sub,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:5}}>{label}</div>
+        <div style={{fontSize:17,color:color || C.text,fontWeight:700}}>{value}</div>
+      </div>
+    );
+  }
+
+  if (!loaded) return <div style={{padding:"50px 20px",textAlign:"center",color:C.sub}}>Loading Execution Reviews...</div>;
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"flex-end",justifyContent:"space-between",gap:18,flexWrap:"wrap",marginBottom:20,paddingBottom:18,borderBottom:"1px solid "+C.border}}>
+        <div>
+          <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:32,fontWeight:700,color:C.text,letterSpacing:"0.06em",textTransform:"uppercase",lineHeight:1}}>Execution Review</div>
+          <div style={{fontSize:10,color:C.gold,letterSpacing:"0.13em",textTransform:"uppercase",marginTop:7}}>Plan Deviations & Decision Quality</div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          {flash && <span style={{fontSize:10,color:C.green,letterSpacing:"0.08em",textTransform:"uppercase"}}>{flash}</span>}
+          <button onClick={openAdd} style={{background:C.gold,border:"1px solid "+C.gold,borderRadius:4,color:C.bg,fontSize:11,fontWeight:700,padding:"10px 16px",cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.08em"}}>+ ADD EXECUTION REVIEW</button>
+        </div>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(145px,1fr))",gap:8,marginBottom:16}}>
+        {summaryCards.map(function(card){
+          return (
+            <div key={card.label} style={{background:C.card,border:"1px solid "+C.border,borderRadius:6,padding:"13px 14px",minHeight:74}}>
+              <div style={{fontSize:9,color:C.sub,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:8,lineHeight:1.35}}>{card.label}</div>
+              <div style={{fontSize:20,color:card.color,fontWeight:700}}>{card.value}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:6,padding:"12px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:9,marginBottom:16}}>
+        <div>
+          <span style={labelStyle}>Plan Compliant</span>
+          <select value={filters.compliance} onChange={function(e){setFilter("compliance",e.target.value);}} style={inputStyle}>
+            <option value="ALL">All</option><option value="YES">YES</option><option value="NO">NO</option>
+          </select>
+        </div>
+        <div>
+          <span style={labelStyle}>Instrument</span>
+          <select value={filters.instrument} onChange={function(e){setFilter("instrument",e.target.value);}} style={inputStyle}>
+            <option value="ALL">All</option>{instruments.map(function(item){return <option key={item} value={item}>{item}</option>;})}
+          </select>
+        </div>
+        <div>
+          <span style={labelStyle}>Deviation Type</span>
+          <select value={filters.deviation} onChange={function(e){setFilter("deviation",e.target.value);}} style={inputStyle}>
+            <option value="ALL">All</option>{DEVIATION_TYPE_OPTIONS.map(function(item){return <option key={item} value={item}>{item}</option>;})}
+          </select>
+        </div>
+        <div>
+          <span style={labelStyle}>Reason</span>
+          <select value={filters.reason} onChange={function(e){setFilter("reason",e.target.value);}} style={inputStyle}>
+            <option value="ALL">All</option>{EXECUTION_REASON_OPTIONS.map(function(item){return <option key={item} value={item}>{item}</option>;})}
+          </select>
+        </div>
+        <div><span style={labelStyle}>From</span><input type="date" value={filters.from} onChange={function(e){setFilter("from",e.target.value);}} style={inputStyle}/></div>
+        <div><span style={labelStyle}>To</span><input type="date" value={filters.to} onChange={function(e){setFilter("to",e.target.value);}} style={inputStyle}/></div>
+      </div>
+
+      {!reviews.length && (
+        <div style={{border:"1px dashed "+C.border,borderRadius:6,padding:"46px 20px",textAlign:"center",color:C.sub,fontSize:12}}>No Execution Reviews yet.</div>
+      )}
+      {!!reviews.length && !visibleRows.length && (
+        <div style={{border:"1px dashed "+C.border,borderRadius:6,padding:"34px 20px",textAlign:"center",color:C.sub,fontSize:12}}>No reviews match these filters.</div>
+      )}
+      <div style={{display:"grid",gap:10}}>
+        {visibleRows.map(function(row){
+          const review = row.review; const trade = row.trade; const metrics = row.metrics;
+          const impactColor = metrics.executionImpact == null ? C.sub : metrics.executionImpact < 0 ? C.red : metrics.executionImpact > 0 ? C.green : C.sub;
+          return (
+            <div key={review.id} style={{background:C.card,border:"1px solid "+(review.planCompliant === "NO" ? C.red+"55" : C.border),borderRadius:7,padding:"16px 18px"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:14,flexWrap:"wrap"}}>
+                <div>
+                  <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:20,fontWeight:700,color:C.text,letterSpacing:"0.04em"}}>
+                    {trade ? formatExecutionDate(trade.date)+" | "+(trade.product||"-")+" | "+(trade.entry_time||"-")+" > "+(trade.exit_time||"-") : "Linked trade unavailable"}
+                  </div>
+                  {trade && <div style={{fontSize:10,color:C.sub,marginTop:5}}>{(trade.direction||"-")+" | "+trade.entry_price+" > "+trade.exit_price+" | "+fmtD(Number(trade.pnl_dollars||0))}</div>}
+                  <div style={{fontSize:10,color:C.gold,marginTop:7,letterSpacing:"0.05em"}}>{review.exitPlan+(review.exitMechanism?" | "+review.exitMechanism:"")}</div>
+                  <div style={{fontSize:11,color:review.planCompliant === "NO" ? C.red : C.green,marginTop:5,fontWeight:700}}>
+                    {(review.deviationType || "Plan-compliant decision")+(review.reason?" | "+review.reason:"")}
+                  </div>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{border:"1px solid "+(review.planCompliant === "NO" ? C.red : C.green),borderRadius:4,color:review.planCompliant === "NO" ? C.red : C.green,fontSize:10,fontWeight:700,padding:"5px 8px"}}>{"PLAN "+review.planCompliant}</span>
+                  <button onClick={function(){openEdit(review);}} style={{background:"transparent",border:"1px solid "+C.border,borderRadius:4,color:C.sub,fontSize:10,padding:"6px 9px",cursor:"pointer",fontFamily:"inherit"}}>EDIT</button>
+                  <button onClick={function(){deleteReview(review);}} style={{background:"transparent",border:"1px solid "+C.red+"70",borderRadius:4,color:C.red,fontSize:10,padding:"6px 9px",cursor:"pointer",fontFamily:"inherit"}}>DELETE</button>
+                </div>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:14,borderTop:"1px solid "+C.border,marginTop:14,paddingTop:13}}>
+                <ReviewMetric label="Actual R" value={fmtR(metrics.actualR)} color={metrics.actualR == null ? C.sub : metrics.actualR < 0 ? C.red : C.green}/>
+                <ReviewMetric label="Plan-Compliant R" value={fmtR(metrics.planCompliantR)} color={metrics.planCompliantR == null ? C.sub : metrics.planCompliantR < 0 ? C.red : C.green}/>
+                <ReviewMetric label="Execution Impact" value={fmtR(metrics.executionImpact)} color={impactColor}/>
+                <ReviewMetric label="Initial SL" value={metrics.initialStop.price == null ? "Required" : String(metrics.initialStop.price)} color={metrics.initialStop.price == null ? C.gold : C.text}/>
+              </div>
+              {metrics.initialRiskPoints == null && trade && (
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",background:C.gold+"10",borderTop:"1px solid "+C.gold+"45",margin:"13px -18px -2px",padding:"10px 18px"}}>
+                  <span style={{fontSize:10,color:C.gold}}>Initial SL required to calculate R.</span>
+                  <button onClick={function(){if(onOpenInitialStop)onOpenInitialStop(trade.id);}} style={{background:"transparent",border:"1px solid "+C.gold,borderRadius:4,color:C.gold,fontSize:10,padding:"6px 9px",cursor:"pointer",fontFamily:"inherit"}}>OPEN INITIAL SL</button>
+                </div>
+              )}
+              {review.decisionNote && <div style={{borderTop:"1px solid "+C.border,marginTop:13,paddingTop:12,fontSize:11,color:C.text,lineHeight:1.65,whiteSpace:"pre-wrap"}}>{review.decisionNote}</div>}
+            </div>
+          );
+        })}
+      </div>
+
+      {formOpen && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.90)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div style={{background:C.card,border:"1px solid "+C.gold+"60",borderRadius:8,width:"min(920px,100%)",maxHeight:"92vh",overflowY:"auto",padding:"20px"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:14,marginBottom:18,paddingBottom:14,borderBottom:"1px solid "+C.border}}>
+              <div>
+                <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:24,fontWeight:700,color:C.text,letterSpacing:"0.06em",textTransform:"uppercase"}}>{editingId?"Edit Execution Review":"Add Execution Review"}</div>
+                <div style={{fontSize:9,color:C.gold,letterSpacing:"0.12em",textTransform:"uppercase",marginTop:4}}>Single Trade Decision Review</div>
+              </div>
+              <button onClick={function(){setFormOpen(false);}} style={{background:"transparent",border:"none",color:C.sub,fontSize:22,cursor:"pointer",lineHeight:1}}>X</button>
+            </div>
+
+            {!editingId && (
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:10,marginBottom:14}}>
+                <div><span style={labelStyle}>Filter Trade Date</span><input type="date" value={selectorDate} onChange={function(e){setSelectorDate(e.target.value);}} style={inputStyle}/></div>
+                <div>
+                  <span style={labelStyle}>Trade</span>
+                  <select value={form.linkedTradeId} onChange={function(e){updateForm("linkedTradeId",e.target.value);}} style={inputStyle}>
+                    <option value="">Select a trade...</option>
+                    {selectableTrades.map(function(trade){return <option key={trade.id} value={trade.id}>{executionTradeLabel(trade)}</option>;})}
+                  </select>
+                </div>
+              </div>
+            )}
+            {editingId && selectedTrade && <div style={{fontSize:12,color:C.text,borderBottom:"1px solid "+C.border,paddingBottom:13,marginBottom:14}}>{executionTradeLabel(selectedTrade)}</div>}
+            {selectedTrade && (
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap",background:C.panel,border:"1px solid "+C.border,borderRadius:5,padding:"11px 12px",marginBottom:14}}>
+                <span style={{fontSize:10,color:C.sub}}>{(selectedTrade.direction||"-")+" | P&L "+fmtD(Number(selectedTrade.pnl_dollars||0))+" | Initial SL "+(preview.initialStop.price == null?"required":preview.initialStop.price)}</span>
+                {preview.initialStop.price == null && <span style={{fontSize:10,color:C.gold}}>R metrics unavailable until Initial SL is saved.</span>}
+              </div>
+            )}
+
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(210px,1fr))",gap:12,marginBottom:14}}>
+              <div>
+                <span style={labelStyle}>Exit Plan</span>
+                <select value={form.exitPlan} onChange={function(e){updateForm("exitPlan",e.target.value);}} style={inputStyle}>
+                  <option value="">Select...</option>{EXIT_PLAN_OPTIONS.map(function(item){return <option key={item} value={item}>{item}</option>;})}
+                </select>
+              </div>
+              <div>
+                <span style={labelStyle}>Exit Mechanism</span>
+                <select value={form.exitMechanism} onChange={function(e){updateForm("exitMechanism",e.target.value);}} style={inputStyle}>
+                  <option value="">Select...</option>{EXIT_MECHANISM_OPTIONS.map(function(item){return <option key={item} value={item}>{item}</option>;})}
+                </select>
+              </div>
+              <div>
+                <span style={labelStyle}>Plan Compliant</span>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+                  {["YES","NO"].map(function(value){
+                    const selected = form.planCompliant === value; const col = value === "YES" ? C.green : C.red;
+                    return <button key={value} onClick={function(){updateForm("planCompliant",value);}} style={{height:38,background:selected?col+"20":C.panel,border:"1px solid "+(selected?col:C.border),borderRadius:4,color:selected?col:C.sub,fontFamily:"inherit",fontSize:11,fontWeight:700,cursor:"pointer"}}>{value}</button>;
+                  })}
+                </div>
+              </div>
+              {form.planCompliant === "NO" && (
+                <div>
+                  <span style={labelStyle}>Deviation Type</span>
+                  <select value={form.deviationType} onChange={function(e){updateForm("deviationType",e.target.value);}} style={inputStyle}>
+                    <option value="">Select...</option>{DEVIATION_TYPE_OPTIONS.map(function(item){return <option key={item} value={item}>{item}</option>;})}
+                  </select>
+                </div>
+              )}
+              <div>
+                <span style={labelStyle}>Reason {form.planCompliant === "NO" ? "*" : ""}</span>
+                <select value={form.reason} onChange={function(e){updateForm("reason",e.target.value);}} style={inputStyle}>
+                  <option value="">Select...</option>{EXECUTION_REASON_OPTIONS.map(function(item){return <option key={item} value={item}>{item}</option>;})}
+                </select>
+              </div>
+              {form.planCompliant === "NO" && !form.tradeShouldNotExist && (
+                <div><span style={labelStyle}>Plan-Compliant Exit</span><input type="number" step="any" value={form.planCompliantExitPrice} onChange={function(e){updateForm("planCompliantExitPrice",e.target.value);}} style={inputStyle}/></div>
+              )}
+            </div>
+
+            {form.planCompliant === "NO" && (
+              <label style={{display:"flex",alignItems:"center",gap:9,borderTop:"1px solid "+C.border,borderBottom:"1px solid "+C.border,padding:"11px 2px",marginBottom:14,cursor:"pointer",fontSize:11,color:form.tradeShouldNotExist?C.red:C.text}}>
+                <input type="checkbox" checked={form.tradeShouldNotExist} onChange={function(e){updateForm("tradeShouldNotExist",e.target.checked);}}/>
+                This trade should not have existed (Plan-Compliant R = 0R)
+              </label>
+            )}
+
+            <div style={{marginBottom:14}}>
+              <span style={labelStyle}>Decision Note</span>
+              <textarea rows={2} value={form.decisionNote} onChange={function(e){updateForm("decisionNote",e.target.value);}} style={{width:"100%",minHeight:58,background:C.panel,border:"1px solid "+C.border,borderRadius:4,color:C.text,fontSize:12,padding:"10px 11px",fontFamily:"inherit",outline:"none",resize:"vertical",boxSizing:"border-box",lineHeight:1.5}}/>
+            </div>
+
+            {selectedTrade && (
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:12,borderTop:"1px solid "+C.border,borderBottom:"1px solid "+C.border,padding:"14px 0",marginBottom:14}}>
+                <ReviewMetric label="Actual R" value={fmtR(preview.actualR)} color={preview.actualR == null?C.sub:preview.actualR<0?C.red:C.green}/>
+                <ReviewMetric label="Plan-Compliant R" value={fmtR(preview.planCompliantR)} color={preview.planCompliantR == null?C.sub:preview.planCompliantR<0?C.red:C.green}/>
+                <ReviewMetric label="Execution Impact" value={fmtR(preview.executionImpact)} color={preview.executionImpact == null?C.sub:preview.executionImpact<0?C.red:preview.executionImpact>0?C.green:C.sub}/>
+              </div>
+            )}
+            {formError && <div style={{background:C.red+"12",border:"1px solid "+C.red+"60",borderRadius:4,color:C.red,fontSize:11,padding:"9px 11px",marginBottom:12}}>{formError}</div>}
+            <div style={{display:"flex",alignItems:"center",justifyContent:"flex-end",gap:9,flexWrap:"wrap"}}>
+              {selectedTrade && preview.initialStop.price == null && <button onClick={function(){saveForm(true);}} style={{background:"transparent",border:"1px solid "+C.gold,borderRadius:4,color:C.gold,fontSize:10,padding:"9px 12px",cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.05em"}}>SAVE & OPEN INITIAL SL</button>}
+              <button onClick={function(){saveForm(false);}} style={{background:C.gold,border:"1px solid "+C.gold,borderRadius:4,color:C.bg,fontSize:11,fontWeight:700,padding:"9px 18px",cursor:"pointer",fontFamily:"inherit"}}>SAVE REVIEW</button>
+              <button onClick={function(){setFormOpen(false);}} style={{background:"transparent",border:"1px solid "+C.border,borderRadius:4,color:C.sub,fontSize:11,padding:"9px 13px",cursor:"pointer",fontFamily:"inherit"}}>CANCEL</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // TW IMPORT MODAL
 function TWImportModal({onClose, onSave, existing}) {
   const [parsed,  setParsed]  = useState(null);
@@ -2429,8 +2893,14 @@ function Journal() {
     setInitialStopDate(initialStopEditorDate(trades));
     setTab("calendario");
   }
+  function openInitialStopForTrade(tradeId){
+    const trade = trades.find(function(item){ return item.id === tradeId; });
+    if (!trade || !trade.date) return;
+    setInitialStopDate(trade.date);
+    setTab("calendario");
+  }
   function toggleR(){ setShowOnlyR(function(v){return !v;}); }
-  const TABS = [{k:"dashboard",l:"DASHBOARD"},{k:"calendario",l:"CALENDARIO"},{k:"settimanale",l:"SETTIMANALE"},{k:"playbook",l:"PLAYBOOK"}];
+  const TABS = [{k:"dashboard",l:"DASHBOARD"},{k:"calendario",l:"CALENDARIO"},{k:"settimanale",l:"SETTIMANALE"},{k:"playbook",l:"PLAYBOOK"},{k:"execution",l:"EXECUTION"}];
   if (loading) return (
     <div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:C.sub,fontFamily:"'IBM Plex Mono',monospace",fontSize:12}}>
       Caricamento...
@@ -2461,10 +2931,10 @@ function Journal() {
           </button>
         </div>
       </div>
-      <div style={{display:"flex",borderBottom:"1px solid "+C.border,marginBottom:22,gap:2}}>
+      <div style={{display:"flex",borderBottom:"1px solid "+C.border,marginBottom:22,gap:2,overflowX:"auto"}}>
         {TABS.map(function(t){
           return (
-            <button key={t.k} onClick={function(){setTab(t.k);}} style={{padding:"10px 26px",fontSize:13,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,letterSpacing:"0.14em",cursor:"pointer",background:"transparent",border:"none",borderBottom:"2px solid "+(tab===t.k?C.gold:C.border),color:tab===t.k?C.gold:C.sub,transition:"all 0.15s"}}>
+            <button key={t.k} onClick={function(){setTab(t.k);}} style={{flex:"0 0 auto",padding:"10px 26px",fontSize:13,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,letterSpacing:"0.14em",cursor:"pointer",background:"transparent",border:"none",borderBottom:"2px solid "+(tab===t.k?C.gold:C.border),color:tab===t.k?C.gold:C.sub,transition:"all 0.15s"}}>
               {t.l}
             </button>
           );
@@ -2474,6 +2944,7 @@ function Journal() {
       {tab==="calendario"  && <CalendarioView  trades={trades} rv={rv} onImport={function(){setShowImport(true);}} onExport={function(){setShowExport(true);}} onTWImport={function(){setShowTWImport(true);}} ohlcMeta={ohlcMeta} showOnlyR={showOnlyR} onToggleR={toggleR} onUpdateInitialStop={updateInitialStop} initialStopDate={initialStopDate}/>}
       {tab==="settimanale" && <SettimanaleView/>}
       {tab==="playbook"    && <WeeklyPlaybookView/>}
+      {tab==="execution"   && <ExecutionReviewView trades={trades} onOpenInitialStop={openInitialStopForTrade}/>}
     </div>
   );
 }

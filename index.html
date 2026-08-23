@@ -451,39 +451,219 @@ function parseTradovateCSV(text) {
 // DETECT OHLC PRODUCT
 function detectOHLCProduct(data) {
   if (!data || !data.length) return "ES";
+  for (let i = 0; i < data.length; i++) {
+    const sym = String(data[i].symbol || "").toUpperCase();
+    if (/\b(MNQ|NQ)/.test(sym)) return "NQ";
+    if (/\b(MES|ES)/.test(sym)) return "ES";
+  }
   const mid = (data[0].high + data[0].low) / 2;
   return mid > 15000 ? "NQ" : "ES";
 }
 
 // MAE / MFE
+const TW_BAR_SECONDS = 300;
 function parseTWCsv(text) {
-  const lines = text.trim().split("\n").filter(function(l) { return l.trim(); });
+  const lines = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim().split("\n").filter(function(l) { return l.trim(); });
   if (lines.length < 2) return [];
-  const result = [];
-  for (let i = 1; i < lines.length; i++) {
-    const p = lines[i].split(",");
-    if (p.length < 4) continue;
-    const time = parseInt(p[0]); const high = parseFloat(p[2]); const low = parseFloat(p[3]);
-    if (!isNaN(time) && !isNaN(high) && !isNaN(low)) result.push({ time: time, high: high, low: low });
+  const header = parseCSVLine(lines[0]).map(function(h){ return String(h || "").trim().toLowerCase(); });
+  function findCol(names, fallback) {
+    for (let i = 0; i < names.length; i++) {
+      const idx = header.indexOf(names[i]);
+      if (idx >= 0) return idx;
+    }
+    return fallback;
   }
-  return result;
+  const timeIdx = findCol(["time","timestamp","unix","date"], 0);
+  const openIdx = findCol(["open"], 1);
+  const highIdx = findCol(["high"], 2);
+  const lowIdx  = findCol(["low"], 3);
+  const closeIdx = findCol(["close"], 4);
+  const symbolIdx = findCol(["symbol","ticker","instrument"], -1);
+  const byTime = {};
+  for (let i = 1; i < lines.length; i++) {
+    const p = parseCSVLine(lines[i]);
+    if (p.length < 4) continue;
+    let time = parseTWTime(p[timeIdx]);
+    const open = parseMoney(p[openIdx]);
+    const high = parseMoney(p[highIdx]);
+    const low = parseMoney(p[lowIdx]);
+    const close = parseMoney(p[closeIdx]);
+    const symbol = symbolIdx >= 0 ? String(p[symbolIdx] || "").trim() : "";
+    if (time && !isNaN(high) && !isNaN(low) && high >= low) {
+      const key = (symbol || "chart") + "_" + time;
+      if (!byTime[key]) byTime[key] = { time: time, open: open, high: high, low: low, close: close, symbol:symbol };
+      else {
+        byTime[key].high = Math.max(byTime[key].high, high);
+        byTime[key].low = Math.min(byTime[key].low, low);
+        if (!isNaN(open)) byTime[key].open = open;
+        if (!isNaN(close)) byTime[key].close = close;
+      }
+    }
+  }
+  return Object.keys(byTime).map(function(k){ return byTime[k]; }).sort(function(a,b){ return a.time - b.time; });
+}
+function parseTWTime(v) {
+  const raw = String(v || "").trim();
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) {
+    const n = Number(raw);
+    if (!isFinite(n)) return null;
+    return n > 9999999999 ? Math.floor(n / 1000) : n;
+  }
+  const isoNoZone = raw.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?$/);
+  if (isoNoZone) {
+    return Math.floor(Date.UTC(
+      parseInt(isoNoZone[1]), parseInt(isoNoZone[2]) - 1, parseInt(isoNoZone[3]),
+      parseInt(isoNoZone[4]), parseInt(isoNoZone[5]), parseInt(isoNoZone[6] || 0)
+    ) / 1000);
+  }
+  const parsed = Date.parse(raw);
+  return isNaN(parsed) ? null : Math.floor(parsed / 1000);
+}
+function inferOhlcTimeframeSeconds(data) {
+  if (!data || data.length < 2) return TW_BAR_SECONDS;
+  const diffs = [];
+  for (let i = 1; i < data.length; i++) {
+    const d = data[i].time - data[i - 1].time;
+    if (d > 0 && d <= 3600) diffs.push(d);
+  }
+  if (!diffs.length) return TW_BAR_SECONDS;
+  diffs.sort(function(a,b){ return a-b; });
+  return Math.round(percentile(diffs, 0.5) || TW_BAR_SECONDS);
+}
+function countOhlcGaps(data, timeframeSeconds) {
+  if (!data || data.length < 2 || !timeframeSeconds) return 0;
+  let gaps = 0;
+  for (let i = 1; i < data.length; i++) {
+    const d = data[i].time - data[i - 1].time;
+    if (d > timeframeSeconds * 1.5 && d <= 3600) gaps++;
+  }
+  return gaps;
+}
+function unixToETParts(ts) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+    }).formatToParts(new Date(ts * 1000));
+    const map = {};
+    for (let i = 0; i < parts.length; i++) map[parts[i].type] = parts[i].value;
+    return { date: map.year + "-" + map.month + "-" + map.day, time: map.hour + ":" + map.minute };
+  } catch(e) {
+    const offset = getETUtcOffsetHoursFromDate(new Date(ts * 1000));
+    const d = new Date(ts * 1000 - offset * 3600 * 1000);
+    return {
+      date: d.toISOString().slice(0, 10),
+      time: String(d.getUTCHours()).padStart(2, "0") + ":" + String(d.getUTCMinutes()).padStart(2, "0"),
+    };
+  }
 }
 function unixToETDate(ts) {
-  const etMs = ts * 1000 - 4 * 3600 * 1000;
-  return new Date(etMs).toISOString().slice(0, 10);
+  return unixToETParts(ts).date;
+}
+function getETUtcOffsetHours(dateStr) {
+  const p = String(dateStr || "").split("-").map(Number);
+  if (p.length < 3 || !p[0]) return 5;
+  const d = new Date(p[0], p[1] - 1, p[2], 12, 0, 0);
+  return getETUtcOffsetHoursFromDate(d);
+}
+function getETUtcOffsetHoursFromDate(d) {
+  const y = d.getFullYear();
+  const start = getNthSunday(y, 2, 2);
+  const end = getNthSunday(y, 10, 1);
+  return d >= start && d < end ? 4 : 5;
 }
 function etToUnix(dateStr, timeStr) {
   const dp = dateStr.split("-"); const tp = timeStr.split(":");
-  return Math.floor(new Date(Date.UTC(parseInt(dp[0]), parseInt(dp[1]) - 1, parseInt(dp[2]), parseInt(tp[0]) + 4, parseInt(tp[1]), 0)).getTime() / 1000);
+  const offset = getETUtcOffsetHours(dateStr);
+  return Math.floor(new Date(Date.UTC(parseInt(dp[0]), parseInt(dp[1]) - 1, parseInt(dp[2]), parseInt(tp[0]) + offset, parseInt(tp[1]), parseInt(tp[2] || 0))).getTime() / 1000);
+}
+function tradeSymbolRoot(trade) {
+  const raw = [trade && trade.product, trade && trade.contract];
+  for (let i = 0; i < raw.length; i++) {
+    const symbol = String(raw[i] || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (/^MES([FGHJKMNQUVXZ][0-9][0-9]?)?$/.test(symbol)) return "MES";
+    if (/^ES([FGHJKMNQUVXZ][0-9][0-9]?)?$/.test(symbol)) return "ES";
+    if (/^MNQ([FGHJKMNQUVXZ][0-9][0-9]?)?$/.test(symbol)) return "MNQ";
+    if (/^NQ([FGHJKMNQUVXZ][0-9][0-9]?)?$/.test(symbol)) return "NQ";
+  }
+  return "";
+}
+function pointValueForTrade(trade) {
+  const root = tradeSymbolRoot(trade);
+  if (root === "ES") return 50;
+  if (root === "MES") return 5;
+  if (root === "NQ") return 20;
+  if (root === "MNQ") return 2;
+  return null;
+}
+function quantityForMaeMfe(trade) {
+  const q = Number(trade && (trade.max_position_size || trade.quantity || trade.qty || trade.contracts));
+  return q > 0 ? q : null;
+}
+function parseOptionalPrice(v) {
+  if (v == null || String(v).trim() === "") return null;
+  const n = parseFloat(String(v).replace(/,/g, ""));
+  return isNaN(n) || !isFinite(n) ? null : n;
+}
+function initialStopInfoForTrade(trade) {
+  if (!trade) return { price:null, status:"missing", source:"none", label:"Missing" };
+  const fields = [
+    {key:"manual_initial_stop", source:"manual", label:"Manual"},
+    {key:"initial_stop_manual", source:"manual", label:"Manual"},
+    {key:"initial_stop_price", source:trade.initial_stop_source || "manual", label:trade.initial_stop_source === "auto" ? "Auto" : "Manual"},
+    {key:"initial_stop", source:trade.initial_stop_source || "manual", label:trade.initial_stop_source === "auto" ? "Auto" : "Manual"},
+    {key:"initial_sl_price", source:trade.initial_stop_source || "manual", label:trade.initial_stop_source === "auto" ? "Auto" : "Manual"},
+    {key:"initial_sl", source:trade.initial_stop_source || "manual", label:trade.initial_stop_source === "auto" ? "Auto" : "Manual"},
+  ];
+  for (let i = 0; i < fields.length; i++) {
+    const price = parseOptionalPrice(trade[fields[i].key]);
+    if (price != null) return { price:price, status:"available", source:fields[i].source, label:fields[i].label, field:fields[i].key };
+  }
+  const finalStop = parseOptionalPrice(trade.stop_price || trade.final_stop_price || trade.stopPrice);
+  if (finalStop != null) return { price:null, status:"ambiguous", source:"final_stop_ignored", label:"Ambiguous", reason:"final stop ignored" };
+  return { price:null, status:"missing", source:"none", label:"Missing" };
+}
+function initialRiskPointsForTrade(trade) {
+  const entry = Number(trade && trade.entry_price);
+  const stopInfo = initialStopInfoForTrade(trade);
+  const stop = stopInfo.price;
+  if (!entry || !stop) return null;
+  const dir = String(trade.direction || "").toLowerCase();
+  const risk = dir === "buy" ? entry - stop : stop - entry;
+  return risk > 0 ? risk : null;
+}
+function initialRiskUsdForTrade(trade) {
+  const riskPoints = initialRiskPointsForTrade(trade);
+  const pointValue = pointValueForTrade(trade);
+  const qty = quantityForMaeMfe(trade);
+  return riskPoints && pointValue && qty ? riskPoints * pointValue * qty : null;
+}
+function isMaeMfePartialAmbiguous(trade) {
+  if (!trade || !trade.partial) return false;
+  if (trade.source === "tradovate" || trade.position_id || trade.entry_leg_count || trade.exit_leg_count || trade.partial_group_id) return false;
+  return true;
+}
+function getOhlcForTrade(trade, ohlcES, ohlcNQ) {
+  const family = productFamily(trade);
+  if (family === "NQ") return ohlcNQ || [];
+  if (family === "ES") return ohlcES || [];
+  return [];
+}
+function maeMfeUnavailable(reason) {
+  return { available:false, status:"unavailable", reason:reason };
 }
 function calcMaeMfe(trade, ohlcES, ohlcNQ) {
-  const product = (trade.product || "ES").toUpperCase();
-  const ohlcData = (product === "NQ" || product === "MNQ") ? (ohlcNQ || []) : (ohlcES || []);
-  if (!trade.entry_price || !trade.exit_price || !trade.entry_time || !trade.exit_time || !ohlcData.length) return null;
+  const ohlcData = getOhlcForTrade(trade, ohlcES, ohlcNQ);
+  if (!trade || !trade.entry_price || !trade.exit_price || !trade.date || !trade.entry_time || !trade.exit_time) return maeMfeUnavailable("trade data missing");
+  if (isMaeMfePartialAmbiguous(trade)) return maeMfeUnavailable("partial grouping ambiguous");
+  if (!ohlcData.length) return maeMfeUnavailable("OHLC missing");
   const entryUnix = etToUnix(trade.date, trade.entry_time);
-  const exitUnix  = etToUnix(trade.date, trade.exit_time);
-  const candles = ohlcData.filter(function(c) { return c.time >= entryUnix - 300 && c.time <= exitUnix; });
-  if (!candles.length) return null;
+  let exitUnix  = etToUnix(trade.date, trade.exit_time);
+  if (exitUnix < entryUnix) exitUnix += 86400;
+  const candles = ohlcData.filter(function(c) { return c.time >= entryUnix && c.time <= exitUnix; });
+  if (!candles.length) return maeMfeUnavailable("no candle inside trade window");
   let maxHigh = -Infinity; let minLow = Infinity;
   for (let i = 0; i < candles.length; i++) {
     if (candles[i].high > maxHigh) maxHigh = candles[i].high;
@@ -493,28 +673,206 @@ function calcMaeMfe(trade, ohlcES, ohlcNQ) {
   let mae; let mfe; let pnlPts;
   if (trade.direction === "Buy") { mae = Math.max(0, ep - minLow); mfe = Math.max(0, maxHigh - ep); pnlPts = xp - ep; }
   else                           { mae = Math.max(0, maxHigh - ep); mfe = Math.max(0, ep - minLow); pnlPts = ep - xp; }
+  const pointValue = pointValueForTrade(trade);
+  const qty = quantityForMaeMfe(trade);
+  const initialStopInfo = initialStopInfoForTrade(trade);
+  const initialRiskPoints = initialRiskPointsForTrade(trade);
+  const initialRiskUsd = initialRiskUsdForTrade(trade);
+  const maeDollars = pointValue && qty ? mae * pointValue * qty : null;
+  const mfeDollars = pointValue && qty ? mfe * pointValue * qty : null;
+  const maeR = initialRiskPoints ? mae / initialRiskPoints : null;
+  const mfeR = initialRiskPoints ? mfe / initialRiskPoints : null;
   const efficiency = mfe > 0.01 ? Math.max(0, Math.min(100, (pnlPts / mfe) * 100)) : 0;
-  return { mae: mae, mfe: mfe, efficiency: efficiency };
+  return {
+    available:true,
+    status:"available",
+    source:"tradingview_ohlc",
+    timeframe_seconds:inferOhlcTimeframeSeconds(ohlcData),
+    window_start_et:trade.date + " " + trade.entry_time,
+    window_end_et:trade.date + " " + trade.exit_time,
+    entry_unix:entryUnix,
+    exit_unix:exitUnix,
+    candles:candles.length,
+    product_root:tradeSymbolRoot(trade),
+    family:productFamily(trade),
+    point_value:pointValue,
+    quantity:qty,
+    max_high:maxHigh,
+    min_low:minLow,
+    mae:mae,
+    mfe:mfe,
+    mae_points:mae,
+    mfe_points:mfe,
+    mae_dollars:maeDollars,
+    mfe_dollars:mfeDollars,
+    initial_stop_price:initialStopInfo.price,
+    initial_stop_status:initialStopInfo.status,
+    initial_stop_source:initialStopInfo.source,
+    initial_risk_points:initialRiskPoints,
+    initial_risk_usd:initialRiskUsd,
+    mae_r:maeR,
+    mfe_r:mfeR,
+    r_status:initialRiskPoints ? "available" : (initialStopInfo.status === "ambiguous" ? "ambiguous_initial_stop" : "missing_initial_stop"),
+    dollars_status:(pointValue && qty) ? "available" : "unavailable_point_value_or_quantity",
+    efficiency:efficiency,
+  };
+}
+function percentile(sorted, p) {
+  if (!sorted.length) return null;
+  const pos = (sorted.length - 1) * p;
+  const base = Math.floor(pos);
+  const rest = pos - base;
+  if (sorted[base + 1] != null) return sorted[base] + rest * (sorted[base + 1] - sorted[base]);
+  return sorted[base];
+}
+function summarizeValues(values) {
+  const clean = values.filter(function(v){ return v != null && !isNaN(v) && isFinite(v); }).sort(function(a,b){ return a-b; });
+  if (!clean.length) return { n:0, avg:null, median:null, p25:null, p75:null, p90:null };
+  const sum = clean.reduce(function(a,b){ return a+b; }, 0);
+  return {
+    n:clean.length,
+    avg:sum / clean.length,
+    median:percentile(clean, 0.5),
+    p25:percentile(clean, 0.25),
+    p75:percentile(clean, 0.75),
+    p90:percentile(clean, 0.90),
+  };
+}
+function updateMaeMfeRiskFromTrade(trade, mm) {
+  if (!mm || !mm.available) return mm;
+  const next = {};
+  Object.keys(mm).forEach(function(k){ next[k] = mm[k]; });
+  const pointValue = pointValueForTrade(trade);
+  const qty = quantityForMaeMfe(trade);
+  const initialStopInfo = initialStopInfoForTrade(trade);
+  const initialRiskPoints = initialRiskPointsForTrade(trade);
+  const initialRiskUsd = initialRiskUsdForTrade(trade);
+  next.point_value = pointValue;
+  next.quantity = qty;
+  next.mae_dollars = pointValue && qty ? next.mae_points * pointValue * qty : null;
+  next.mfe_dollars = pointValue && qty ? next.mfe_points * pointValue * qty : null;
+  next.initial_stop_price = initialStopInfo.price;
+  next.initial_stop_status = initialStopInfo.status;
+  next.initial_stop_source = initialStopInfo.source;
+  next.initial_risk_points = initialRiskPoints;
+  next.initial_risk_usd = initialRiskUsd;
+  next.mae_r = initialRiskPoints ? next.mae_points / initialRiskPoints : null;
+  next.mfe_r = initialRiskPoints ? next.mfe_points / initialRiskPoints : null;
+  next.r_status = initialRiskPoints ? "available" : (initialStopInfo.status === "ambiguous" ? "ambiguous_initial_stop" : "missing_initial_stop");
+  next.dollars_status = (pointValue && qty) ? "available" : "unavailable_point_value_or_quantity";
+  return next;
+}
+function maeMfeForTrade(trade, ohlcES, ohlcNQ) {
+  if (trade && trade.mae_mfe && trade.mae_mfe.available) return updateMaeMfeRiskFromTrade(trade, trade.mae_mfe);
+  return calcMaeMfe(trade, ohlcES, ohlcNQ);
+}
+function addMaeMfeStatsToTrade(trade, ohlcES, ohlcNQ) {
+  if (!trade || getTradeResult(trade) === "Open" || !trade.entry_price || !trade.exit_price || !trade.date || !trade.entry_time || !trade.exit_time) return trade;
+  const fresh = calcMaeMfe(trade, ohlcES, ohlcNQ);
+  const mm = fresh.available ? fresh : (trade.mae_mfe && trade.mae_mfe.available ? updateMaeMfeRiskFromTrade(trade, trade.mae_mfe) : fresh);
+  if (JSON.stringify(trade.mae_mfe || null) === JSON.stringify(mm || null)) return trade;
+  const next = {};
+  Object.keys(trade).forEach(function(k){ next[k] = trade[k]; });
+  next.mae_mfe = mm;
+  return next;
+}
+function enrichTradesWithMaeMfe(trades, ohlcES, ohlcNQ) {
+  let changed = false;
+  const next = trades.map(function(t){
+    const out = addMaeMfeStatsToTrade(t, ohlcES, ohlcNQ);
+    if (out !== t) changed = true;
+    return out;
+  });
+  return { trades:next, changed:changed };
+}
+function thresholdCounts(items, key, levels) {
+  const available = items.filter(function(x){ return x[key] != null && !isNaN(x[key]) && isFinite(x[key]); });
+  return levels.map(function(level){
+    const count = available.filter(function(x){ return x[key] >= level.value; }).length;
+    return { label:level.label, count:count, total:available.length, pct:available.length ? count / available.length * 100 : null };
+  });
+}
+function rangeCounts(items, key, ranges) {
+  const available = items.filter(function(x){ return x[key] != null && !isNaN(x[key]) && isFinite(x[key]); });
+  return ranges.map(function(range){
+    const count = available.filter(function(x){
+      const v = x[key];
+      const minOk = range.min == null || v > range.min;
+      const maxOk = range.max == null || v <= range.max;
+      return minOk && maxOk;
+    }).length;
+    return { label:range.label, count:count, total:available.length, pct:available.length ? count / available.length * 100 : null };
+  });
+}
+function maeMfeGroup(items) {
+  return {
+    n:items.length,
+    mae:summarizeValues(items.map(function(x){ return x.mae_points; })),
+    mfe:summarizeValues(items.map(function(x){ return x.mfe_points; })),
+    maeD:summarizeValues(items.map(function(x){ return x.mae_dollars; })),
+    mfeD:summarizeValues(items.map(function(x){ return x.mfe_dollars; })),
+    maeR:summarizeValues(items.map(function(x){ return x.mae_r; })),
+    mfeR:summarizeValues(items.map(function(x){ return x.mfe_r; })),
+  };
 }
 function calcMaeMfeStats(trades, ohlcES, ohlcNQ) {
-  if ((!ohlcES || !ohlcES.length) && (!ohlcNQ || !ohlcNQ.length)) return null;
-  const results = [];
+  if (!trades || !trades.length) return null;
+  const results = []; let unavailable = 0; let rUnavailable = 0; let dollarUnavailable = 0;
   for (let i = 0; i < trades.length; i++) {
     const t = trades[i];
     if (getTradeResult(t) !== "Open" && t.entry_price && t.exit_price) {
-      const r = calcMaeMfe(t, ohlcES, ohlcNQ);
-      if (r) results.push(r);
+      const r = maeMfeForTrade(t, ohlcES, ohlcNQ);
+      if (r && r.available) {
+        const item = {};
+        Object.keys(r).forEach(function(k){ item[k] = r[k]; });
+        item.trade = t;
+        item.result = getTradeResult(t);
+        item.direction = t.direction || "";
+        results.push(item);
+        if (r.r_status !== "available") rUnavailable++;
+        if (r.dollars_status !== "available") dollarUnavailable++;
+      } else unavailable++;
     }
   }
   if (!results.length) return null;
   const n = results.length;
   let sumMae = 0; let sumMfe = 0; let sumEff = 0; let cntEff = 0;
   for (let i = 0; i < results.length; i++) {
-    sumMae += results[i].mae;
-    sumMfe += results[i].mfe;
+    sumMae += results[i].mae_points;
+    sumMfe += results[i].mfe_points;
     if (results[i].mfe > 0.01) { sumEff += results[i].efficiency; cntEff++; }
   }
-  return { avgMae: sumMae / n, avgMfe: sumMfe / n, avgEff: cntEff ? sumEff / cntEff : 0, n: n };
+  const winners = results.filter(function(x){ return x.result === "Win"; });
+  const losers = results.filter(function(x){ return x.result === "Loss"; });
+  const all = maeMfeGroup(results);
+  return {
+    n:n,
+    unavailable:unavailable,
+    rUnavailable:rUnavailable,
+    dollarUnavailable:dollarUnavailable,
+    avgMae:sumMae / n,
+    avgMfe:sumMfe / n,
+    avgEff:cntEff ? sumEff / cntEff : 0,
+    all:all,
+    winners:maeMfeGroup(winners),
+    losers:maeMfeGroup(losers),
+    es:maeMfeGroup(results.filter(function(x){ return x.family === "ES"; })),
+    nq:maeMfeGroup(results.filter(function(x){ return x.family === "NQ"; })),
+    longs:maeMfeGroup(results.filter(function(x){ return x.direction === "Buy"; })),
+    shorts:maeMfeGroup(results.filter(function(x){ return x.direction === "Sell"; })),
+    winnerMfeR:thresholdCounts(winners, "mfe_r", [
+      {label:"0.5R",value:0.5},{label:"1R",value:1},{label:"1.5R",value:1.5},{label:"2R",value:2},{label:"2.5R",value:2.5},{label:"3R",value:3},{label:"4R",value:4},{label:"5R+",value:5}
+    ]),
+    winnerMaeR:thresholdCounts(winners, "mae_r", [
+      {label:"0.25R",value:0.25},{label:"0.50R",value:0.5},{label:"0.75R",value:0.75},{label:"1R",value:1}
+    ]),
+    winnerMaeRanges:rangeCounts(winners, "mae_r", [
+      {label:"<=0.25R",min:null,max:0.25},{label:"0.25-0.50R",min:0.25,max:0.5},{label:"0.50-0.75R",min:0.5,max:0.75},{label:"0.75-1R",min:0.75,max:1}
+    ]),
+    loserMfeR:thresholdCounts(losers, "mfe_r", [
+      {label:"0.25R",value:0.25},{label:"0.5R",value:0.5},{label:"0.75R",value:0.75},{label:"1R",value:1},{label:"1.5R",value:1.5},{label:"2R+",value:2}
+    ]),
+  };
 }
 
 // STATS ENGINE
@@ -685,6 +1043,182 @@ function AssetWinRateDonuts({trades}) {
   );
 }
 
+// MAE / MFE DASHBOARD
+function fmtMaeMfePoints(v) {
+  return v == null ? "-" : v.toFixed(2) + " pt";
+}
+function fmtMaeMfeDollars(v) {
+  return v == null ? "-" : "$" + Math.round(v).toLocaleString();
+}
+function fmtMaeMfeR(v) {
+  return v == null ? "-" : v.toFixed(2) + "R";
+}
+function MaeMfeMetric({label, value, sub, color}) {
+  return (
+    <div style={{background:C.panel,borderRadius:8,padding:"14px 16px",border:"1px solid "+(color||C.border)+"30",minHeight:82}}>
+      <div style={{fontSize:9,color:C.sub,letterSpacing:"0.13em",textTransform:"uppercase",marginBottom:7}}>{label}</div>
+      <div style={{fontSize:22,fontWeight:700,color:color||C.text,lineHeight:1.05}}>{value}</div>
+      {sub && <div style={{fontSize:10,color:C.sub,opacity:0.72,marginTop:5,lineHeight:1.35}}>{sub}</div>}
+    </div>
+  );
+}
+function MaeMfeDistRow({label, stat, format, color}) {
+  return (
+    <tr style={{borderTop:"0.5px solid "+C.border}}>
+      <td style={{padding:"8px 8px 8px 0",fontSize:11,color:color,fontWeight:700}}>{label}</td>
+      <td style={{padding:"8px 4px",fontSize:11,color:C.text,textAlign:"center"}}>{stat.n}</td>
+      <td style={{padding:"8px 4px",fontSize:11,color:C.text,textAlign:"center"}}>{format(stat.avg)}</td>
+      <td style={{padding:"8px 4px",fontSize:11,color:C.text,textAlign:"center"}}>{format(stat.median)}</td>
+      <td style={{padding:"8px 4px",fontSize:11,color:C.sub,textAlign:"center"}}>{format(stat.p25)}</td>
+      <td style={{padding:"8px 4px",fontSize:11,color:C.sub,textAlign:"center"}}>{format(stat.p75)}</td>
+      <td style={{padding:"8px 4px",fontSize:11,color:C.sub,textAlign:"center"}}>{format(stat.p90)}</td>
+    </tr>
+  );
+}
+function MaeMfeDistributionTable({title, group, showDollars}) {
+  if (!group || !group.n) return null;
+  const rows = [
+    {label:"MAE points", stat:group.mae, format:fmtMaeMfePoints, color:C.red},
+    {label:"MFE points", stat:group.mfe, format:fmtMaeMfePoints, color:C.green},
+  ];
+  if (showDollars) {
+    rows.push({label:"MAE dollars", stat:group.maeD, format:fmtMaeMfeDollars, color:C.red});
+    rows.push({label:"MFE dollars", stat:group.mfeD, format:fmtMaeMfeDollars, color:C.green});
+  }
+  if (group.maeR.n || group.mfeR.n) {
+    rows.push({label:"MAE R", stat:group.maeR, format:fmtMaeMfeR, color:C.red});
+    rows.push({label:"MFE R", stat:group.mfeR, format:fmtMaeMfeR, color:C.green});
+  }
+  return (
+    <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:8,padding:"14px 16px"}}>
+      <div style={{fontSize:11,color:C.gold,letterSpacing:"0.11em",textTransform:"uppercase",fontWeight:700,marginBottom:10}}>{title}</div>
+      <table style={{width:"100%",borderCollapse:"collapse"}}>
+        <thead>
+          <tr>
+            <th style={{textAlign:"left",paddingBottom:6,fontSize:9,color:C.sub,fontWeight:600}}>{""}</th>
+            {["N","AVG","MED","P25","P75","P90"].map(function(h){ return <th key={h} style={{textAlign:"center",padding:"0 4px 6px",fontSize:9,color:C.sub,fontWeight:600}}>{h}</th>; })}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(function(row){ return <MaeMfeDistRow key={row.label} label={row.label} stat={row.stat} format={row.format} color={row.color}/>; })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+function MaeMfeGroupRow({label, group, color}) {
+  return (
+    <tr style={{borderTop:"0.5px solid "+C.border}}>
+      <td style={{padding:"8px 8px 8px 0",fontSize:11,color:color,fontWeight:700}}>{label}</td>
+      <td style={{padding:"8px 4px",fontSize:11,color:C.text,textAlign:"center"}}>{group.n}</td>
+      <td style={{padding:"8px 4px",fontSize:11,color:C.red,textAlign:"center"}}>{fmtMaeMfePoints(group.mae.median)}</td>
+      <td style={{padding:"8px 4px",fontSize:11,color:C.green,textAlign:"center"}}>{fmtMaeMfePoints(group.mfe.median)}</td>
+      <td style={{padding:"8px 4px",fontSize:11,color:C.sub,textAlign:"center"}}>{fmtMaeMfeR(group.mfeR.median)}</td>
+    </tr>
+  );
+}
+function MaeMfeGroupTable({stats}) {
+  const rows = [
+    {label:"Winner", group:stats.winners, color:C.green},
+    {label:"Loser", group:stats.losers, color:C.red},
+    {label:"ES / MES", group:stats.es, color:C.gold},
+    {label:"NQ / MNQ", group:stats.nq, color:C.blue},
+    {label:"Long", group:stats.longs, color:C.green},
+    {label:"Short", group:stats.shorts, color:C.red},
+  ].filter(function(row){ return row.group && row.group.n; });
+  if (!rows.length) return null;
+  return (
+    <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:8,padding:"14px 16px"}}>
+      <div style={{fontSize:11,color:C.gold,letterSpacing:"0.11em",textTransform:"uppercase",fontWeight:700,marginBottom:10}}>Groups</div>
+      <table style={{width:"100%",borderCollapse:"collapse"}}>
+        <thead>
+          <tr>
+            <th style={{textAlign:"left",paddingBottom:6,fontSize:9,color:C.sub,fontWeight:600}}>{""}</th>
+            {["N","MAE MED","MFE MED","MFE R MED"].map(function(h){ return <th key={h} style={{textAlign:"center",padding:"0 4px 6px",fontSize:9,color:C.sub,fontWeight:600}}>{h}</th>; })}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(function(row){ return <MaeMfeGroupRow key={row.label} label={row.label} group={row.group} color={row.color}/>; })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+function MaeMfeThresholdTable({title, rows}) {
+  const total = rows && rows.length ? rows[0].total : 0;
+  return (
+    <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:8,padding:"14px 16px"}}>
+      <div style={{fontSize:11,color:C.gold,letterSpacing:"0.11em",textTransform:"uppercase",fontWeight:700,marginBottom:10}}>{title}</div>
+      {!total ? (
+        <div style={{fontSize:11,color:C.sub,lineHeight:1.5}}>R unavailable: initial stop mancante.</div>
+      ) : (
+        <div style={{display:"grid",gap:7}}>
+          {rows.map(function(row){
+            const shown = total < 10 ? row.count + "/" + total : row.pct.toFixed(0) + "%";
+            return (
+              <div key={row.label} style={{display:"grid",gridTemplateColumns:"80px 1fr 48px",alignItems:"center",gap:8}}>
+                <div style={{fontSize:10,color:C.sub}}>{row.label}</div>
+                <div style={{height:5,background:C.muted,borderRadius:3}}>
+                  <div style={{width:(row.pct||0)+"%",height:"100%",background:C.blue,borderRadius:3}}/>
+                </div>
+                <div style={{fontSize:10,color:C.text,textAlign:"right",fontWeight:700}}>{shown}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+function MaeMfeSection({stats, showOnlyR}) {
+  if (!stats) return (
+    <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:10,padding:"14px 20px",marginBottom:14,display:"flex",alignItems:"center",gap:16}}>
+      <div style={{fontSize:10,color:C.muted}}>MAE / MFE</div>
+      <div style={{fontSize:12,color:C.muted}}>Importa CSV TradingView dal Calendario</div>
+    </div>
+  );
+  const showDollars = !showOnlyR && (stats.all.maeD.n || stats.all.mfeD.n);
+  const rAvailable = stats.all.maeR.n || stats.all.mfeR.n;
+  const effC = stats.avgEff>=50?C.green:stats.avgEff>=30?C.gold:C.red;
+  return (
+    <div style={{background:C.card,border:"1px solid "+C.blue+"40",borderRadius:10,padding:"16px 20px",marginBottom:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,marginBottom:12,flexWrap:"wrap"}}>
+        <div>
+          <div style={{fontSize:13,color:C.blue,letterSpacing:"0.11em",textTransform:"uppercase",fontWeight:700}}>MAE / MFE</div>
+          <div style={{fontSize:10,color:C.sub,marginTop:4}}>{stats.n+" trade calcolati con OHLC TradingView"}</div>
+        </div>
+        <div style={{fontSize:10,color:rAvailable?C.green:C.gold,border:"1px solid "+(rAvailable?C.green:C.gold)+"40",borderRadius:4,padding:"5px 9px",whiteSpace:"nowrap"}}>
+          {rAvailable ? "R attiva su "+Math.max(stats.all.maeR.n, stats.all.mfeR.n)+" trade" : "R unavailable"}
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10,marginBottom:12}}>
+        <MaeMfeMetric label="Avg MAE" value={fmtMaeMfePoints(stats.all.mae.avg)} sub="max contro" color={C.red}/>
+        <MaeMfeMetric label="Avg MFE" value={fmtMaeMfePoints(stats.all.mfe.avg)} sub="max a favore" color={C.green}/>
+        <MaeMfeMetric label="Exit Efficiency" value={stats.avgEff.toFixed(1)+"%"} sub="catturato / disponibile" color={effC}/>
+        <MaeMfeMetric label="Coverage" value={String(stats.n)} sub={stats.unavailable ? stats.unavailable+" non calcolabili" : "tutti disponibili"} color={C.sub}/>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))",gap:12,marginBottom:12}}>
+        <MaeMfeDistributionTable title="All trade distribution" group={stats.all} showDollars={showDollars}/>
+        <MaeMfeGroupTable stats={stats}/>
+      </div>
+      {rAvailable ? (
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(230px,1fr))",gap:12,marginBottom:12}}>
+          <MaeMfeThresholdTable title="Winner MFE reached" rows={stats.winnerMfeR}/>
+          <MaeMfeThresholdTable title="Winner MAE before move" rows={stats.winnerMaeRanges}/>
+          <MaeMfeThresholdTable title="Loser MFE reached" rows={stats.loserMfeR}/>
+        </div>
+      ) : (
+        <div style={{background:C.gold+"10",border:"1px solid "+C.gold+"30",borderRadius:8,padding:"11px 14px",fontSize:11,color:C.sub,lineHeight:1.5,marginBottom:12}}>
+          R unavailable: nei trade non e presente lo stop iniziale. MAE_R e MFE_R verranno calcolati solo quando il trade avra initial_stop o initial_stop_price.
+        </div>
+      )}
+      {!showOnlyR && stats.dollarUnavailable>0 && (
+        <div style={{fontSize:10,color:C.sub,lineHeight:1.5}}>Dollari unavailable su {stats.dollarUnavailable} trade: manca quantity o point value affidabile.</div>
+      )}
+    </div>
+  );
+}
+
 // DURATION ANALYSIS
 function DurationAnalysis({trades, rv}) {
   const BUCKETS=[
@@ -749,7 +1283,7 @@ function DurationAnalysis({trades, rv}) {
 }
 
 // DAY TRADE LIST
-function DayTradeList({trades, rv, date}) {
+function DayTradeList({trades, rv, date, onUpdateInitialStop}) {
   if (!trades||!trades.length) return null;
   const closed=trades.filter(function(t){return getTradeResult(t)!=="Open";});
   if (!closed.length) return null;
@@ -773,12 +1307,34 @@ function DayTradeList({trades, rv, date}) {
         const rCol=tradeResult==="Win"?C.green:tradeResult==="Loss"?C.red:C.gold;
         const fascia=getFascia(t.entry_time||"");
         const fasciaCol=FASCIA_COL[fascia]||"#374050";
+        const stopInfo=initialStopInfoForTrade(t);
+        const stopCol=stopInfo.status==="available"?(stopInfo.source==="auto"?C.green:C.blue):(stopInfo.status==="ambiguous"?C.red:C.gold);
         return(
           <div key={t.id||i} style={{display:"grid",gridTemplateColumns:"auto 1fr auto auto auto",gap:12,alignItems:"center",padding:"8px 0",borderTop:i>0?"0.5px solid "+C.muted:"none"}}>
             <div style={{fontSize:9,padding:"3px 8px",background:fasciaCol+"25",border:"1px solid "+fasciaCol+"60",borderRadius:4,color:fasciaCol,whiteSpace:"nowrap"}}>{fascia}</div>
             <div>
               <div style={{fontSize:11,color:t.direction==="Buy"?C.green:C.red,fontWeight:600}}>{t.direction==="Buy"?"BUY":"SELL"} <span style={{color:C.sub,fontWeight:400}}>{t.product||"ES"}</span></div>
-              <div style={{fontSize:9,color:C.sub}}>{t.entry_time} -> {t.exit_time||"-"} <span style={{marginLeft:4}}>{fmtDur(t.duration)}</span></div>
+              <div style={{fontSize:9,color:C.sub}}>{t.entry_time+" -> "+(t.exit_time||"-")} <span style={{marginLeft:4}}>{fmtDur(t.duration)}</span></div>
+              {t.mae_mfe && t.mae_mfe.available && (
+                <div style={{fontSize:9,color:C.muted,marginTop:3}}>
+                  {"MAE "+fmtMaeMfePoints(t.mae_mfe.mae_points)+" | MFE "+fmtMaeMfePoints(t.mae_mfe.mfe_points)+(t.mae_mfe.r_status==="available"?" | MFE_R "+fmtMaeMfeR(t.mae_mfe.mfe_r):" | R unavailable")}
+                </div>
+              )}
+              {t.mae_mfe && !t.mae_mfe.available && (
+                <div style={{fontSize:9,color:C.gold,marginTop:3}}>
+                  {"MAE/MFE unavailable: "+(t.mae_mfe.reason || "dati insufficienti")}
+                </div>
+              )}
+              {onUpdateInitialStop && (
+                <div style={{display:"flex",alignItems:"center",gap:7,marginTop:5,flexWrap:"wrap"}}>
+                  <span style={{fontSize:9,color:C.sub}}>Initial SL</span>
+                  <input type="number" step="0.25" defaultValue={stopInfo.price != null ? stopInfo.price : ""} placeholder="price"
+                    onBlur={function(e){ onUpdateInitialStop(t.id, e.target.value); }}
+                    onKeyDown={function(e){ if(e.key==="Enter") e.currentTarget.blur(); }}
+                    style={{width:82,background:C.card,border:"1px solid "+C.border,borderRadius:4,color:C.text,fontSize:10,padding:"4px 6px",fontFamily:"inherit",outline:"none"}}/>
+                  <span style={{fontSize:8,color:stopCol,border:"1px solid "+stopCol+"50",borderRadius:4,padding:"2px 5px"}}>{stopInfo.label}</span>
+                </div>
+              )}
             </div>
             <div style={{textAlign:"right"}}>
               <div style={{fontSize:9,color:C.sub}}>Entry</div>
@@ -944,12 +1500,9 @@ function weekRangeLabel(week) {
   return first[2] + " " + fMonth + " - " + last[2] + " " + lMonth;
 }
 function productFamily(trade) {
-  const raw = [trade && trade.product, trade && trade.contract];
-  for (let i = 0; i < raw.length; i++) {
-    const symbol = String(raw[i] || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-    if (/^M?ES([FGHJKMNQUVXZ][0-9][0-9]?)?$/.test(symbol)) return "ES";
-    if (/^M?NQ([FGHJKMNQUVXZ][0-9][0-9]?)?$/.test(symbol)) return "NQ";
-  }
+  const root = tradeSymbolRoot(trade);
+  if (root === "ES" || root === "MES") return "ES";
+  if (root === "NQ" || root === "MNQ") return "NQ";
   return "OTHER";
 }
 function fmtPfValue(m) {
@@ -1052,7 +1605,7 @@ function WeekCell({weekTrades, rv, showOnlyR, selected, onClick}) {
 }
 
 // CALENDARIO VIEW
-function CalendarioView({trades, rv, onImport, onExport, onTWImport, ohlcMeta, showOnlyR, onToggleR}) {
+function CalendarioView({trades, rv, onImport, onExport, onTWImport, ohlcMeta, showOnlyR, onToggleR, onUpdateInitialStop}) {
   const now = new Date();
   const [year,  setYear]  = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth());
@@ -1137,7 +1690,7 @@ function CalendarioView({trades, rv, onImport, onExport, onTWImport, ohlcMeta, s
       </div>
       {selectedWeek && <WeekStatsPanel week={selectedWeek.week} trades={selectedWeek.trades} rv={rv}/>}
       {selectedDate && (
-        <DayTradeList trades={byDate[selectedDate]||[]} rv={rv} date={selectedDate}/>
+        <DayTradeList trades={byDate[selectedDate]||[]} rv={rv} date={selectedDate} onUpdateInitialStop={onUpdateInitialStop}/>
       )}
     </div>
   );
@@ -1157,7 +1710,6 @@ function Dashboard({trades, rv, ohlcData, ohlcNQ, showOnlyR, onToggleR}) {
   const rfC  = m.rf>=3?C.green:m.rf>=1.5?C.gold:C.red;
   const evC  = m.ev>=0?C.green:C.red;
   const totC = m.totalR>=0?C.green:C.red;
-  const effC = mmStats ? (mmStats.avgEff>=50?C.green:mmStats.avgEff>=30?C.gold:C.red) : C.sub;
   return (
     <div>
       <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
@@ -1188,33 +1740,7 @@ function Dashboard({trades, rv, ohlcData, ohlcNQ, showOnlyR, onToggleR}) {
         <DonutChart w={m.w} l={m.l} be={m.be}/>
         <AssetWinRateDonuts trades={trades}/>
       </div>
-      {mmStats ? (
-        <div style={{background:C.card,border:"1px solid "+C.blue+"40",borderRadius:10,padding:"16px 20px",marginBottom:14}}>
-          <div style={{fontSize:13,color:C.blue,letterSpacing:"0.11em",textTransform:"uppercase",marginBottom:12,fontWeight:700}}>{"MAE / MFE - "+mmStats.n+" trade con OHLC - M5"}</div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
-            <div style={{background:C.panel,borderRadius:8,padding:"14px 16px",border:"1px solid "+C.red+"30"}}>
-              <div style={{fontSize:9,color:C.sub,letterSpacing:"0.13em",textTransform:"uppercase",marginBottom:7}}>Avg MAE</div>
-              <div style={{fontSize:22,fontWeight:700,color:C.red,lineHeight:1}}>{mmStats.avgMae.toFixed(2)+" pt"}</div>
-              <div style={{fontSize:10,color:C.red,opacity:0.65,marginTop:4}}>max contro</div>
-            </div>
-            <div style={{background:C.panel,borderRadius:8,padding:"14px 16px",border:"1px solid "+C.green+"30"}}>
-              <div style={{fontSize:9,color:C.sub,letterSpacing:"0.13em",textTransform:"uppercase",marginBottom:7}}>Avg MFE</div>
-              <div style={{fontSize:22,fontWeight:700,color:C.green,lineHeight:1}}>{mmStats.avgMfe.toFixed(2)+" pt"}</div>
-              <div style={{fontSize:10,color:C.green,opacity:0.65,marginTop:4}}>max a favore</div>
-            </div>
-            <div style={{background:C.panel,borderRadius:8,padding:"14px 16px",border:"1px solid "+effC+"30"}}>
-              <div style={{fontSize:9,color:C.sub,letterSpacing:"0.13em",textTransform:"uppercase",marginBottom:7}}>Exit Efficiency</div>
-              <div style={{fontSize:22,fontWeight:700,color:effC,lineHeight:1}}>{mmStats.avgEff.toFixed(1)+"%"}</div>
-              <div style={{fontSize:10,color:C.sub,opacity:0.65,marginTop:4}}>catturato / disponibile</div>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:10,padding:"14px 20px",marginBottom:14,display:"flex",alignItems:"center",gap:16}}>
-          <div style={{fontSize:10,color:C.muted}}>MAE / MFE</div>
-          <div style={{fontSize:12,color:C.muted}}>Importa CSV TradingView dal Calendario</div>
-        </div>
-      )}
+      <MaeMfeSection stats={mmStats} showOnlyR={showOnlyR}/>
       <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"16px 20px",marginBottom:12}}>
         <div style={{fontSize:13,color:C.text,letterSpacing:"0.11em",textTransform:"uppercase",marginBottom:14,fontWeight:700}}>Expectancy per fascia oraria</div>
         {FASCIA_LIST.map(function(item){
@@ -1521,7 +2047,9 @@ function TWImportModal({onClose, onSave, existing}) {
         const daySet = {};
         data.forEach(function(c){ daySet[unixToETDate(c.time)]=1; });
         const days = Object.keys(daySet).length;
-        setParsed({data:data,first:first,last:last,n:data.length,days:days}); setError("");
+        const timeframe = inferOhlcTimeframeSeconds(data);
+        const gaps = countOhlcGaps(data, timeframe);
+        setParsed({data:data,first:first,last:last,n:data.length,days:days,timeframe_seconds:timeframe,gaps:gaps}); setError("");
       } catch(err){ setError("Errore: "+err.message); }
     };
     reader.readAsText(file);
@@ -1537,7 +2065,7 @@ function TWImportModal({onClose, onSave, existing}) {
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
           <div>
             <div style={{fontSize:13,color:C.text,fontWeight:600,letterSpacing:"0.08em"}}>IMPORT OHLC - TRADINGVIEW</div>
-            <div style={{fontSize:10,color:C.sub,marginTop:3}}>Toolbar TW in alto -> Export chart data -> ES M5 -> Export</div>
+            <div style={{fontSize:10,color:C.sub,marginTop:3}}>{"Toolbar TW in alto -> Export chart data -> ES M5 -> Export"}</div>
           </div>
           <button onClick={onClose} style={{background:"transparent",border:"none",color:C.sub,fontSize:22,cursor:"pointer",lineHeight:1}}>{"X"}</button>
         </div>
@@ -1556,6 +2084,7 @@ function TWImportModal({onClose, onSave, existing}) {
             <div>
               <div style={{fontSize:14,color:C.green,fontWeight:700,marginBottom:4}}>{parsed.n+" candele caricate"}</div>
               <div style={{fontSize:12,color:C.text,marginBottom:4}}>{parsed.first+" -> "+parsed.last+" - "+parsed.days+" giorni"}</div>
+              <div style={{fontSize:10,color:C.sub,marginBottom:4}}>{"Timeframe rilevato: "+Math.round(parsed.timeframe_seconds/60)+"m - gap intraday: "+parsed.gaps}</div>
               <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:8}}>{"Prodotto rilevato: "+detectOHLCProduct(parsed.data)}</div>
               <label style={{display:"inline-block",padding:"6px 16px",border:"1px solid "+C.border,borderRadius:4,color:C.sub,fontSize:10,fontFamily:"inherit",cursor:"pointer"}}>
                 Cambia file<input type="file" accept=".csv" onChange={handleFile} style={{display:"none"}}/>
@@ -1566,7 +2095,7 @@ function TWImportModal({onClose, onSave, existing}) {
         {error && <div style={{marginBottom:12,padding:"8px 12px",background:C.red+"10",border:"1px solid "+C.red+"30",borderRadius:4,fontSize:11,color:C.red}}>{error}</div>}
         <div style={{padding:"10px 14px",background:C.gold+"08",border:"1px solid "+C.gold+"25",borderRadius:6,marginBottom:16}}>
           <div style={{fontSize:10,color:C.gold,fontWeight:600,marginBottom:3}}>Timezone</div>
-          <div style={{fontSize:10,color:C.sub,lineHeight:1.6}}>TradingView UTC -> Journal converte in ET per il matching con trade Tradovate.</div>
+          <div style={{fontSize:10,color:C.sub,lineHeight:1.6}}>{"TradingView UTC -> Journal converte in ET per il matching con trade Tradovate."}</div>
         </div>
         <div style={{display:"flex",gap:10}}>
           <button onClick={handleSave} disabled={!parsed||saving} style={{padding:"9px 24px",background:"transparent",border:"1px solid "+(parsed?C.blue:C.muted),borderRadius:4,color:parsed?C.blue:C.muted,fontSize:11,fontFamily:"inherit",cursor:parsed?"pointer":"default",letterSpacing:"0.1em",textTransform:"uppercase"}}>
@@ -1580,7 +2109,7 @@ function TWImportModal({onClose, onSave, existing}) {
 }
 
 // IMPORT MODAL (Tradovate)
-function ImportModal({onClose, trades, setTrades}) {
+function ImportModal({onClose, trades, setTrades, ohlcData, ohlcNQ}) {
   const [parsed,  setParsed]  = useState(null);
   const [error,   setError]   = useState("");
   const [saving,  setSaving]  = useState(false);
@@ -1601,8 +2130,9 @@ function ImportModal({onClose, trades, setTrades}) {
     trades.forEach(function(t){ existingIds[t.id]=1; });
     const newTrades = [...trades];
     parsed.trades.forEach(function(t){ if (!existingIds[t.id]) newTrades.push(t); });
-    setTrades(newTrades);
-    try{ await storage.set("jnl:v2:trades",JSON.stringify(newTrades)); }catch(e){}
+    const enriched = ((ohlcData && ohlcData.length) || (ohlcNQ && ohlcNQ.length)) ? enrichTradesWithMaeMfe(newTrades, ohlcData || [], ohlcNQ || []) : {trades:newTrades};
+    setTrades(enriched.trades);
+    try{ await storage.set("jnl:v2:trades",JSON.stringify(enriched.trades)); }catch(e){}
     setSaving(false); onClose();
   }
   const winsN   = parsed ? parsed.trades.filter(function(t){return getTradeResult(t)==="Win";}).length  : 0;
@@ -1614,7 +2144,7 @@ function ImportModal({onClose, trades, setTrades}) {
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
           <div>
             <div style={{fontSize:13,color:C.text,fontWeight:600,letterSpacing:"0.08em"}}>IMPORT - TRADOVATE</div>
-            <div style={{fontSize:10,color:C.sub,marginTop:3}}>Position History CSV - Account -> Settings -> Orders -> Download CSV</div>
+            <div style={{fontSize:10,color:C.sub,marginTop:3}}>{"Position History CSV - Account -> Settings -> Orders -> Download CSV"}</div>
           </div>
           <button onClick={onClose} style={{background:"transparent",border:"none",color:C.sub,fontSize:22,cursor:"pointer",lineHeight:1}}>{"X"}</button>
         </div>
@@ -1767,7 +2297,11 @@ function Journal() {
   async function saveTWOhlc(data, meta){
     const product = detectOHLCProduct(data);
     meta.product = product;
+    meta.timeframe_seconds = inferOhlcTimeframeSeconds(data);
+    meta.gaps = countOhlcGaps(data, meta.timeframe_seconds);
     const compact = data.map(function(c){return[c.time,c.high,c.low];});
+    const nextES = product === "NQ" ? ohlcData : data;
+    const nextNQ = product === "NQ" ? data : ohlcNQ;
     if (product === "NQ") {
       setOhlcNQ(data); setOhlcMetaNQ(meta);
       try{ await storage.set("jnl:v2:ohlcNQ",JSON.stringify(compact)); await storage.set("jnl:v2:ohlcMetaNQ",JSON.stringify(meta)); }catch(e){}
@@ -1775,6 +2309,39 @@ function Journal() {
       setOhlcData(data); setOhlcMeta(meta);
       try{ await storage.set("jnl:v2:ohlc",JSON.stringify(compact)); await storage.set("jnl:v2:ohlcmeta",JSON.stringify(meta)); }catch(e){}
     }
+    const enriched = enrichTradesWithMaeMfe(trades, nextES, nextNQ);
+    if (enriched.changed) {
+      setTrades(enriched.trades);
+      try{ await storage.set("jnl:v2:trades",JSON.stringify(enriched.trades)); }catch(e){}
+    }
+  }
+  async function updateInitialStop(tradeId, value){
+    if (!tradeId) return;
+    const raw = String(value || "").trim();
+    const stop = parseOptionalPrice(raw);
+    if (raw !== "" && stop == null) return;
+    let changed = false;
+    const nextTrades = trades.map(function(t){
+      if (t.id !== tradeId) return t;
+      const next = {};
+      Object.keys(t).forEach(function(k){ next[k] = t[k]; });
+      if (raw === "") {
+        delete next.initial_stop_price;
+        delete next.initial_stop_source;
+        delete next.manual_initial_stop;
+        delete next.initial_stop_manual;
+      } else {
+        next.initial_stop_price = stop;
+        next.initial_stop_source = "manual";
+      }
+      const fresh = calcMaeMfe(next, ohlcData, ohlcNQ);
+      next.mae_mfe = fresh.available ? fresh : (t.mae_mfe && t.mae_mfe.available ? updateMaeMfeRiskFromTrade(next, t.mae_mfe) : fresh);
+      changed = true;
+      return next;
+    });
+    if (!changed) return;
+    setTrades(nextTrades);
+    try{ await storage.set("jnl:v2:trades",JSON.stringify(nextTrades)); }catch(e){}
   }
   function toggleR(){ setShowOnlyR(function(v){return !v;}); }
   const TABS = [{k:"dashboard",l:"DASHBOARD"},{k:"calendario",l:"CALENDARIO"},{k:"settimanale",l:"SETTIMANALE"},{k:"playbook",l:"PLAYBOOK"}];
@@ -1786,7 +2353,7 @@ function Journal() {
   return (
     <div style={{fontFamily:"'IBM Plex Mono','Courier New',monospace",fontSize:13,background:C.bg,minHeight:"100vh",color:C.text,padding:"20px 22px",boxSizing:"border-box"}}>
       <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Barlow+Condensed:wght@400;600;700&display=swap" rel="stylesheet"/>
-      {showImport    && <ImportModal   onClose={function(){setShowImport(false);}}   trades={trades} setTrades={setTrades}/>}
+      {showImport    && <ImportModal   onClose={function(){setShowImport(false);}}   trades={trades} setTrades={setTrades} ohlcData={ohlcData} ohlcNQ={ohlcNQ}/>}
       {showExport    && <ExportModal   trades={trades} rv={rv}                        onClose={function(){setShowExport(false);}}/>}
       {showSettings  && <SettingsModal rv={rv}         onSave={saveSettings}          onClose={function(){setShowSettings(false);}}/>}
       {showTWImport  && <TWImportModal onClose={function(){setShowTWImport(false);}}  onSave={saveTWOhlc} existing={ohlcMeta}/>}
@@ -1818,7 +2385,7 @@ function Journal() {
         })}
       </div>
       {tab==="dashboard"   && <Dashboard      trades={trades} rv={rv} ohlcData={ohlcData} ohlcNQ={ohlcNQ} showOnlyR={showOnlyR} onToggleR={toggleR}/>}
-      {tab==="calendario"  && <CalendarioView  trades={trades} rv={rv} onImport={function(){setShowImport(true);}} onExport={function(){setShowExport(true);}} onTWImport={function(){setShowTWImport(true);}} ohlcMeta={ohlcMeta} showOnlyR={showOnlyR} onToggleR={toggleR}/>}
+      {tab==="calendario"  && <CalendarioView  trades={trades} rv={rv} onImport={function(){setShowImport(true);}} onExport={function(){setShowExport(true);}} onTWImport={function(){setShowTWImport(true);}} ohlcMeta={ohlcMeta} showOnlyR={showOnlyR} onToggleR={toggleR} onUpdateInitialStop={updateInitialStop}/>}
       {tab==="settimanale" && <SettimanaleView/>}
       {tab==="playbook"    && <WeeklyPlaybookView/>}
     </div>

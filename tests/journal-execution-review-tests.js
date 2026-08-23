@@ -163,6 +163,7 @@ function testPlanCompliantExcludedFromDeviationTotals() {
   approx(summary.totalRGained, 0, "compliant gained total");
   approx(summary.netExecutionImpact, 0, "compliant net total");
   assert.strictEqual(summary.measuredCompliantDecisions, 0);
+  assert.strictEqual(summary.measuredDecisions, 0);
 }
 function testInitialStopEditRecalculates() {
   const trade = makeTrade("stop-edit", "2026-08-22", "Buy", 100, 90, 110);
@@ -218,6 +219,22 @@ function testCompliantDecisionSummary() {
   assert.strictEqual(summary.harmfulDeviations, 0);
   assert.strictEqual(summary.beneficialDeviations, 0);
 }
+function testUnifiedDecisionSummary() {
+  const earlyExitTrade = makeTrade("unified-early", "2026-08-19", "Buy", 100, 99, 101.55);
+  const intuitiveTrade = makeTrade("unified-intuition", "2026-08-17", "Buy", 100, 99, 99.76);
+  const reviews = [
+    makeReview("r-unified-early", earlyExitTrade.id, {planCompliant:"NO", planCompliantExitPrice:102.27}),
+    makeReview("r-unified-intuition", intuitiveTrade.id, {planCompliant:"YES", withoutInterventionExitPrice:99}),
+  ];
+  const summary = context.calcExecutionReviewSummary(reviews, [earlyExitTrade,intuitiveTrade]);
+  assert.strictEqual(summary.reviewedTrades, 2);
+  assert.strictEqual(summary.measuredDecisions, 2);
+  assert.strictEqual(summary.helpfulDecisions, 1);
+  assert.strictEqual(summary.harmfulDecisions, 1);
+  approx(summary.totalDecisionRGained, 0.76, "unified R gained");
+  approx(summary.totalDecisionRLost, 0.72, "unified R lost");
+  approx(summary.netDecisionImpact, 0.04, "unified net decision impact");
+}
 function testCompliantDecisionMissingStop() {
   const trade = makeTrade("compliant-missing-stop", "2026-08-23", "Buy", 100, null, 105);
   delete trade.initial_stop_price;
@@ -260,6 +277,7 @@ testNoMfeDependency();
 testHelpfulCompliantDecisionLong();
 testHelpfulCompliantDecisionShort();
 testCompliantDecisionSummary();
+testUnifiedDecisionSummary();
 testCompliantDecisionMissingStop();
 testCompliantDecisionReactsToInitialStopEdit();
 testOvertradingNeverShouldExist();

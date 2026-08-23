@@ -717,12 +717,13 @@ function calcExecutionReviewSummary(reviews, trades) {
   const deviations = rows.filter(function(row){ return row.review.planCompliant === "NO"; });
   const measuredCompliant = rows.filter(function(row){ return row.review.planCompliant === "YES" && row.metrics.compliantDecisionValue != null && isFinite(row.metrics.compliantDecisionValue); });
   const deviationDates = {};
-  let harmful = 0; let beneficial = 0; let lost = 0; let gained = 0; let net = 0;
+  let measuredDeviations = 0; let harmful = 0; let beneficial = 0; let lost = 0; let gained = 0; let net = 0;
   let helpfulCompliant = 0; let harmfulCompliant = 0; let compliantAdded = 0; let compliantLost = 0; let compliantNet = 0;
   deviations.forEach(function(row){
     if (row.trade && row.trade.date) deviationDates[row.trade.date] = true;
     const impact = row.metrics.executionImpact;
     if (impact == null || !isFinite(impact)) return;
+    measuredDeviations++;
     net += impact;
     if (impact < -0.0000001) { harmful++; lost += Math.abs(impact); }
     else if (impact > 0.0000001) { beneficial++; gained += impact; }
@@ -750,6 +751,12 @@ function calcExecutionReviewSummary(reviews, trades) {
     compliantRAdded:compliantAdded,
     compliantRLost:compliantLost,
     netCompliantDecisionValue:compliantNet,
+    measuredDecisions:measuredDeviations + measuredCompliant.length,
+    helpfulDecisions:beneficial + helpfulCompliant,
+    harmfulDecisions:harmful + harmfulCompliant,
+    totalDecisionRGained:gained + compliantAdded,
+    totalDecisionRLost:lost + compliantLost,
+    netDecisionImpact:net + compliantNet,
   };
 }
 function formatExecutionDate(dateStr) {
@@ -2375,21 +2382,14 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
   const inputStyle = {width:"100%",background:C.panel,border:"1px solid "+C.border,borderRadius:4,color:C.text,fontSize:12,padding:"10px 11px",fontFamily:"inherit",outline:"none",boxSizing:"border-box"};
   const labelStyle = {display:"block",fontSize:10,color:C.sub,letterSpacing:"0.11em",textTransform:"uppercase",fontWeight:700,marginBottom:7};
   const summaryCards = [
-    {label:"Deviation Days",value:String(summary.deviationDays),color:C.gold},
     {label:"Reviewed Trades",value:String(summary.reviewedTrades),color:C.text},
-    {label:"Harmful Deviations",value:String(summary.harmfulDeviations),color:C.red},
-    {label:"Beneficial Deviations",value:String(summary.beneficialDeviations),color:C.green},
-    {label:"Total R Lost",value:summary.totalRLost.toFixed(2)+"R",color:C.red},
-    {label:"Total R Gained",value:fmtR(summary.totalRGained),color:C.green},
-    {label:"Net Execution Impact",value:fmtR(summary.netExecutionImpact),color:summary.netExecutionImpact < 0 ? C.red : summary.netExecutionImpact > 0 ? C.green : C.sub},
-  ];
-  const compliantDecisionCards = [
-    {label:"Measured Decisions",value:String(summary.measuredCompliantDecisions),color:C.text},
-    {label:"Helpful Decisions",value:String(summary.helpfulCompliantDecisions),color:C.green},
-    {label:"Harmful Decisions",value:String(summary.harmfulCompliantDecisions),color:C.red},
-    {label:"R Added",value:fmtR(summary.compliantRAdded),color:C.green},
-    {label:"R Lost",value:summary.compliantRLost.toFixed(2)+"R",color:C.red},
-    {label:"Net Decision Value",value:fmtR(summary.netCompliantDecisionValue),color:summary.netCompliantDecisionValue < 0 ? C.red : summary.netCompliantDecisionValue > 0 ? C.green : C.sub},
+    {label:"Measured Decisions",value:String(summary.measuredDecisions),color:C.text},
+    {label:"Deviation Days",value:String(summary.deviationDays),color:C.gold},
+    {label:"Helpful Decisions",value:String(summary.helpfulDecisions),color:C.green},
+    {label:"Harmful Decisions",value:String(summary.harmfulDecisions),color:C.red},
+    {label:"Total R Gained",value:fmtR(summary.totalDecisionRGained),color:C.green},
+    {label:"Total R Lost",value:summary.totalDecisionRLost.toFixed(2)+"R",color:C.red},
+    {label:"Net Decision Impact",value:fmtR(summary.netDecisionImpact),color:summary.netDecisionImpact < 0 ? C.red : summary.netDecisionImpact > 0 ? C.green : C.sub},
   ];
   function ReviewMetric({label, value, color}) {
     return (
@@ -2414,20 +2414,9 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
         </div>
       </div>
 
+      <div style={{fontSize:10,color:C.green,letterSpacing:"0.1em",textTransform:"uppercase",fontWeight:700,margin:"2px 0 8px"}}>Decision Impact - All Measured Reviews</div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(145px,1fr))",gap:8,marginBottom:16}}>
         {summaryCards.map(function(card){
-          return (
-            <div key={card.label} style={{background:C.card,border:"1px solid "+C.border,borderRadius:6,padding:"13px 14px",minHeight:74}}>
-              <div style={{fontSize:9,color:C.sub,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:8,lineHeight:1.35}}>{card.label}</div>
-              <div style={{fontSize:20,color:card.color,fontWeight:700}}>{card.value}</div>
-            </div>
-          );
-        })}
-      </div>
-
-      <div style={{fontSize:10,color:C.green,letterSpacing:"0.1em",textTransform:"uppercase",fontWeight:700,margin:"2px 0 8px"}}>Plan-Compliant Decision Value</div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(145px,1fr))",gap:8,marginBottom:16}}>
-        {compliantDecisionCards.map(function(card){
           return (
             <div key={card.label} style={{background:C.card,border:"1px solid "+C.border,borderRadius:6,padding:"13px 14px",minHeight:74}}>
               <div style={{fontSize:9,color:C.sub,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:8,lineHeight:1.35}}>{card.label}</div>

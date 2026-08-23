@@ -602,6 +602,21 @@ function quantityForMaeMfe(trade) {
   const q = Number(trade && (trade.max_position_size || trade.quantity || trade.qty || trade.contracts));
   return q > 0 ? q : null;
 }
+const MAE_MFE_START_DATE = "2026-08-17";
+function isMaeMfeInScope(trade) {
+  return !!(trade && trade.date && trade.date >= MAE_MFE_START_DATE);
+}
+function clearMaeMfeBeforeStart(trades) {
+  let changed = false;
+  const next = (trades || []).map(function(trade){
+    if (!trade || isMaeMfeInScope(trade) || !Object.prototype.hasOwnProperty.call(trade, "mae_mfe")) return trade;
+    const clean = {};
+    Object.keys(trade).forEach(function(key){ if (key !== "mae_mfe") clean[key] = trade[key]; });
+    changed = true;
+    return clean;
+  });
+  return { trades:next, changed:changed };
+}
 function parseOptionalPrice(v) {
   if (v == null || String(v).trim() === "") return null;
   const n = parseFloat(String(v).replace(/,/g, ""));
@@ -657,6 +672,7 @@ function maeMfeUnavailable(reason) {
 function calcMaeMfe(trade, ohlcES, ohlcNQ) {
   const ohlcData = getOhlcForTrade(trade, ohlcES, ohlcNQ);
   if (!trade || !trade.entry_price || !trade.exit_price || !trade.date || !trade.entry_time || !trade.exit_time) return maeMfeUnavailable("trade data missing");
+  if (!isMaeMfeInScope(trade)) return maeMfeUnavailable("before MAE/MFE start date");
   if (isMaeMfePartialAmbiguous(trade)) return maeMfeUnavailable("partial grouping ambiguous");
   if (!ohlcData.length) return maeMfeUnavailable("OHLC missing");
   const entryUnix = etToUnix(trade.date, trade.entry_time);
@@ -763,11 +779,19 @@ function updateMaeMfeRiskFromTrade(trade, mm) {
   return next;
 }
 function maeMfeForTrade(trade, ohlcES, ohlcNQ) {
+  if (!isMaeMfeInScope(trade)) return maeMfeUnavailable("before MAE/MFE start date");
   if (trade && trade.mae_mfe && trade.mae_mfe.available) return updateMaeMfeRiskFromTrade(trade, trade.mae_mfe);
   return calcMaeMfe(trade, ohlcES, ohlcNQ);
 }
 function addMaeMfeStatsToTrade(trade, ohlcES, ohlcNQ) {
-  if (!trade || getTradeResult(trade) === "Open" || !trade.entry_price || !trade.exit_price || !trade.date || !trade.entry_time || !trade.exit_time) return trade;
+  if (!trade) return trade;
+  if (!isMaeMfeInScope(trade)) {
+    if (!Object.prototype.hasOwnProperty.call(trade, "mae_mfe")) return trade;
+    const clean = {};
+    Object.keys(trade).forEach(function(key){ if (key !== "mae_mfe") clean[key] = trade[key]; });
+    return clean;
+  }
+  if (getTradeResult(trade) === "Open" || !trade.entry_price || !trade.exit_price || !trade.date || !trade.entry_time || !trade.exit_time) return trade;
   const fresh = calcMaeMfe(trade, ohlcES, ohlcNQ);
   const mm = fresh.available ? fresh : (trade.mae_mfe && trade.mae_mfe.available ? updateMaeMfeRiskFromTrade(trade, trade.mae_mfe) : fresh);
   if (JSON.stringify(trade.mae_mfe || null) === JSON.stringify(mm || null)) return trade;
@@ -820,6 +844,7 @@ function calcMaeMfeStats(trades, ohlcES, ohlcNQ) {
   const results = []; let unavailable = 0; let rUnavailable = 0; let dollarUnavailable = 0;
   for (let i = 0; i < trades.length; i++) {
     const t = trades[i];
+    if (!isMaeMfeInScope(t)) continue;
     if (getTradeResult(t) !== "Open" && t.entry_price && t.exit_price) {
       const r = maeMfeForTrade(t, ohlcES, ohlcNQ);
       if (r && r.available) {
@@ -1174,7 +1199,7 @@ function MaeMfeSection({stats, showOnlyR}) {
   if (!stats) return (
     <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:10,padding:"14px 20px",marginBottom:14,display:"flex",alignItems:"center",gap:16}}>
       <div style={{fontSize:10,color:C.muted}}>MAE / MFE</div>
-      <div style={{fontSize:12,color:C.muted}}>Importa CSV TradingView dal Calendario</div>
+      <div style={{fontSize:12,color:C.muted}}>Periodo attivo dal 17/08/2026 - importa CSV TradingView dal Calendario</div>
     </div>
   );
   const showDollars = !showOnlyR && (stats.all.maeD.n || stats.all.mfeD.n);
@@ -1185,7 +1210,7 @@ function MaeMfeSection({stats, showOnlyR}) {
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,marginBottom:12,flexWrap:"wrap"}}>
         <div>
           <div style={{fontSize:13,color:C.blue,letterSpacing:"0.11em",textTransform:"uppercase",fontWeight:700}}>MAE / MFE</div>
-          <div style={{fontSize:10,color:C.sub,marginTop:4}}>{stats.n+" trade calcolati con OHLC TradingView"}</div>
+          <div style={{fontSize:10,color:C.sub,marginTop:4}}>{stats.n+" trade calcolati con OHLC TradingView dal 17/08/2026"}</div>
         </div>
         <div style={{fontSize:10,color:rAvailable?C.green:C.gold,border:"1px solid "+(rAvailable?C.green:C.gold)+"40",borderRadius:4,padding:"5px 9px",whiteSpace:"nowrap"}}>
           {rAvailable ? "R attiva su "+Math.max(stats.all.maeR.n, stats.all.mfeR.n)+" trade" : "R unavailable"}
@@ -2276,7 +2301,12 @@ function Journal() {
         const st=await storage.get("jnl:v2:settings");
         const oh=await storage.get("jnl:v2:ohlc");
         const om=await storage.get("jnl:v2:ohlcmeta");
-        if(tr) setTrades(JSON.parse(tr.value));
+        if(tr) {
+          const loadedTrades = JSON.parse(tr.value);
+          const cleanedTrades = clearMaeMfeBeforeStart(loadedTrades);
+          setTrades(cleanedTrades.trades);
+          if (cleanedTrades.changed) await storage.set("jnl:v2:trades",JSON.stringify(cleanedTrades.trades));
+        }
         // else: journal vuoto, pronto per trade reali
         if(st){ const s=JSON.parse(st.value); if(s.rv) setRv(s.rv); }
         if(oh){ const arr=JSON.parse(oh.value); setOhlcData(arr.map(function(c){return{time:c[0],high:c[1],low:c[2]};})); }

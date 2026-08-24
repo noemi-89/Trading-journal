@@ -60,6 +60,9 @@ const FASCIA_MAP = {};
 FASCIA_LIST.forEach(function(item){ FASCIA_MAP[item.key] = item.col; });
 const BE_THRESHOLD_DOLLARS = 150;
 const EXECUTION_REVIEWS_KEY = "jnl:v2:execution_reviews";
+const JOURNAL_STORAGE_NAMESPACE = "jnl:v2:";
+const JOURNAL_BACKUP_FORMAT = "hello-noemi-trading-journal-backup";
+const JOURNAL_BACKUP_VERSION = 1;
 const EXIT_PLAN_OPTIONS = ["Fixed Target","Target + Reassess","Expansion / Trail"];
 const EXIT_MECHANISM_OPTIONS = ["Target Hit","BE Stop","Protected Stop","Trailing Stop","Manual Exit","Other"];
 const DEVIATION_TYPE_OPTIONS = ["Early Exit","Premature Stop Tightening","Stop Modification","Target Modification","Entry Outside Plan","Overtrading","Trade That Should Not Exist","Late Exit","Emotional / Manual Exit","Other"];
@@ -117,6 +120,133 @@ function getTradeResult(t) {
 }
 function calcWinRatePercent(wins, losses) {
   return wins + losses ? wins / (wins + losses) * 100 : 0;
+}
+function makeJournalBackupError(message, code) {
+  const error = new Error(message);
+  error.code = code || "JOURNAL_BACKUP_ERROR";
+  return error;
+}
+function isPlainBackupObject(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function journalStorageKeys(storageLike) {
+  if (!storageLike || typeof storageLike.key !== "function" || typeof storageLike.getItem !== "function") {
+    throw makeJournalBackupError("Journal storage is unavailable.", "STORAGE_UNAVAILABLE");
+  }
+  const keys = [];
+  const seen = {};
+  const length = Number(storageLike.length) || 0;
+  for (let i = 0; i < length; i++) {
+    const key = storageLike.key(i);
+    if (typeof key === "string" && key.startsWith(JOURNAL_STORAGE_NAMESPACE) && !seen[key]) {
+      seen[key] = true;
+      keys.push(key);
+    }
+  }
+  return keys.sort();
+}
+function collectJournalStorageItems(storageLike) {
+  const items = {};
+  journalStorageKeys(storageLike).forEach(function(key){
+    const value = storageLike.getItem(key);
+    if (typeof value !== "string") {
+      throw makeJournalBackupError("Unable to read all Journal data.", "STORAGE_READ_FAILED");
+    }
+    items[key] = value;
+  });
+  return items;
+}
+function createJournalBackup(storageLike, now) {
+  const items = collectJournalStorageItems(storageLike);
+  const keys = Object.keys(items);
+  if (!keys.length) throw makeJournalBackupError("No Journal data found to export.", "EMPTY_JOURNAL");
+  const date = now == null ? new Date() : new Date(now);
+  if (!isFinite(date.getTime())) throw makeJournalBackupError("Unable to create the backup timestamp.", "INVALID_DATE");
+  return {
+    format:JOURNAL_BACKUP_FORMAT,
+    backupVersion:JOURNAL_BACKUP_VERSION,
+    namespace:JOURNAL_STORAGE_NAMESPACE,
+    exportedAt:date.toISOString(),
+    itemCount:keys.length,
+    items:items,
+  };
+}
+function validateJournalBackup(backup) {
+  const invalid = function(message, code){
+    throw makeJournalBackupError(message || "Invalid or corrupted Journal backup.", code || "INVALID_BACKUP");
+  };
+  if (!isPlainBackupObject(backup)) invalid();
+  if (backup.format !== JOURNAL_BACKUP_FORMAT) invalid("Invalid or corrupted Journal backup.", "INVALID_FORMAT");
+  if (backup.backupVersion !== JOURNAL_BACKUP_VERSION) invalid("Unsupported Journal backup version.", "UNSUPPORTED_VERSION");
+  if (backup.namespace !== JOURNAL_STORAGE_NAMESPACE) invalid("Invalid Journal backup namespace.", "INVALID_NAMESPACE");
+  if (typeof backup.exportedAt !== "string" || !isFinite(new Date(backup.exportedAt).getTime())) invalid("Invalid Journal backup date.", "INVALID_DATE");
+  if (!isPlainBackupObject(backup.items)) invalid("Invalid or corrupted Journal backup.", "INVALID_ITEMS");
+  const keys = Object.keys(backup.items);
+  if (!keys.length) invalid("Journal backup is empty.", "EMPTY_BACKUP");
+  if (!Number.isInteger(backup.itemCount) || backup.itemCount !== keys.length) invalid("Invalid Journal backup item count.", "INVALID_ITEM_COUNT");
+  const items = {};
+  keys.sort().forEach(function(key){
+    if (!key.startsWith(JOURNAL_STORAGE_NAMESPACE)) invalid("Journal backup contains a foreign storage key.", "FOREIGN_KEY");
+    if (typeof backup.items[key] !== "string") invalid("Journal backup contains an invalid storage value.", "INVALID_VALUE");
+    items[key] = backup.items[key];
+  });
+  return {
+    format:JOURNAL_BACKUP_FORMAT,
+    backupVersion:JOURNAL_BACKUP_VERSION,
+    namespace:JOURNAL_STORAGE_NAMESPACE,
+    exportedAt:backup.exportedAt,
+    itemCount:keys.length,
+    items:items,
+  };
+}
+function parseJournalBackupText(text) {
+  let parsed;
+  try { parsed = JSON.parse(text); }
+  catch (error) { throw makeJournalBackupError("Invalid or corrupted Journal backup.", "INVALID_JSON"); }
+  return validateJournalBackup(parsed);
+}
+function replaceJournalStorageItems(storageLike, items) {
+  const expectedKeys = Object.keys(items).sort();
+  journalStorageKeys(storageLike).forEach(function(key){
+    storageLike.removeItem(key);
+    if (storageLike.getItem(key) !== null) throw makeJournalBackupError("Unable to replace current Journal data.", "STORAGE_REMOVE_FAILED");
+  });
+  expectedKeys.forEach(function(key){
+    storageLike.setItem(key, items[key]);
+    if (storageLike.getItem(key) !== items[key]) throw makeJournalBackupError("Unable to write all Journal backup data.", "STORAGE_WRITE_FAILED");
+  });
+  const written = collectJournalStorageItems(storageLike);
+  const writtenKeys = Object.keys(written).sort();
+  if (writtenKeys.length !== expectedKeys.length) throw makeJournalBackupError("Journal restore verification failed.", "RESTORE_VERIFY_FAILED");
+  for (let i = 0; i < expectedKeys.length; i++) {
+    const key = expectedKeys[i];
+    if (writtenKeys[i] !== key || written[key] !== items[key]) throw makeJournalBackupError("Journal restore verification failed.", "RESTORE_VERIFY_FAILED");
+  }
+}
+function restoreJournalBackup(storageLike, backup) {
+  const validated = validateJournalBackup(backup);
+  const snapshot = collectJournalStorageItems(storageLike);
+  try {
+    replaceJournalStorageItems(storageLike, validated.items);
+  } catch (restoreError) {
+    try {
+      replaceJournalStorageItems(storageLike, snapshot);
+    } catch (rollbackError) {
+      const fatal = makeJournalBackupError("Restore failed and the automatic rollback could not be verified.", "ROLLBACK_FAILED");
+      fatal.restoreError = restoreError;
+      fatal.rollbackError = rollbackError;
+      throw fatal;
+    }
+    const rolledBack = makeJournalBackupError("Restore failed. Current Journal data was restored.", "RESTORE_FAILED");
+    rolledBack.restoreError = restoreError;
+    throw rolledBack;
+  }
+  return { itemCount:validated.itemCount, exportedAt:validated.exportedAt };
+}
+function journalBackupFilename(now) {
+  const date = now == null ? new Date() : new Date(now);
+  const pad = function(value){ return String(value).padStart(2,"0"); };
+  return "hello-noemi-journal-backup-" + date.getFullYear() + "-" + pad(date.getMonth()+1) + "-" + pad(date.getDate()) + "-" + pad(date.getHours()) + pad(date.getMinutes()) + ".json";
 }
 function fmtR(r)         { if (r == null || isNaN(r)) return "-"; return (r >= 0 ? "+" : "") + r.toFixed(2) + "R"; }
 function fmtD(d)         { if (d == null || isNaN(d)) return "-"; return (d >= 0 ? "+" : "-") + "$" + Math.abs(Math.round(d)).toLocaleString("en-US"); }
@@ -2804,25 +2934,116 @@ function ExportModal({trades, rv, onClose}) {
 // SETTINGS MODAL
 function SettingsModal({rv, onSave, onClose}) {
   const [val, setVal] = useState(String(rv));
+  const [backupStatus, setBackupStatus] = useState("");
+  const [backupError, setBackupError] = useState("");
+  const [restoreCandidate, setRestoreCandidate] = useState(null);
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  function clearBackupFeedback(){ setBackupStatus(""); setBackupError(""); }
+  function exportBackup(){
+    clearBackupFeedback();
+    try {
+      const backup = createJournalBackup(localStorage);
+      const blob = new Blob([JSON.stringify(backup,null,2)],{type:"application/json"});
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = journalBackupFilename();
+      link.style.display = "none";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(function(){ URL.revokeObjectURL(url); },1000);
+      setBackupStatus("Backup exported successfully - "+backup.itemCount+" journal items exported.");
+    } catch (error) {
+      setBackupError(error && error.message ? error.message : "Unable to export Journal backup.");
+    }
+  }
+  async function selectRestoreFile(event){
+    const file = event.target.files && event.target.files[0];
+    event.target.value = "";
+    if (!file) return;
+    clearBackupFeedback();
+    try {
+      const backup = parseJournalBackupText(await file.text());
+      setRestoreCandidate({backup:backup,fileName:file.name});
+    } catch (error) {
+      setRestoreCandidate(null);
+      setBackupError(error && error.message ? error.message : "Invalid or corrupted Journal backup.");
+    }
+  }
+  function confirmRestore(){
+    if (!restoreCandidate || restoreBusy) return;
+    setRestoreBusy(true);
+    clearBackupFeedback();
+    try {
+      const restored = restoreJournalBackup(localStorage, restoreCandidate.backup);
+      setRestoreCandidate(null);
+      setBackupStatus("Journal restored successfully - "+restored.itemCount+" items. Reloading...");
+      setTimeout(function(){ window.location.reload(); },1000);
+    } catch (error) {
+      setRestoreCandidate(null);
+      setRestoreBusy(false);
+      setBackupError(error && error.message ? error.message : "Unable to restore Journal backup.");
+    }
+  }
+  const actionButton = {padding:"10px 16px",background:"transparent",border:"1px solid "+C.gold,borderRadius:4,color:C.gold,fontSize:10,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.1em",textTransform:"uppercase",textAlign:"center"};
   return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.90)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-      <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:12,padding:26,width:380}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:22}}>
-          <span style={{fontSize:13,color:C.text,fontWeight:600,letterSpacing:"0.08em"}}>IMPOSTAZIONI</span>
-          <button onClick={onClose} style={{background:"transparent",border:"none",color:C.sub,fontSize:22,cursor:"pointer",lineHeight:1}}>{"X"}</button>
-        </div>
-        <div style={{marginBottom:20}}>
-          <div style={{fontSize:10,color:C.sub,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:10}}>{"1R = $ - valore fisso in dollari"}</div>
-          <input type="number" value={val} onChange={function(e){setVal(e.target.value);}} min="1" step="25" style={{width:"100%",background:C.card,border:"1px solid "+C.border,borderRadius:4,color:C.text,fontSize:22,fontWeight:700,padding:"12px 16px",fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}/>
-          <div style={{fontSize:10,color:C.sub,marginTop:8}}>{"Default $250 - Aggiorna ad ogni nuovo conto prop"}</div>
-          <div style={{fontSize:10,color:C.sub,marginTop:4}}>{"Esempio: +$500 -> "+(500/(Number(val)||250)).toFixed(2)+"R"}</div>
-        </div>
-        <div style={{display:"flex",gap:10}}>
-          <button onClick={function(){onSave(Number(val)||R_DEFAULT);}} style={{padding:"10px 26px",background:"transparent",border:"1px solid "+C.gold,borderRadius:4,color:C.gold,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.12em",textTransform:"uppercase"}}>SALVA</button>
-          <button onClick={onClose} style={{fontSize:11,color:C.sub,background:"transparent",border:"none",cursor:"pointer",fontFamily:"inherit"}}>Annulla</button>
+    <>
+      <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.90)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+        <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:12,padding:26,width:"100%",maxWidth:500,maxHeight:"90vh",overflowY:"auto"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:22}}>
+            <span style={{fontSize:13,color:C.text,fontWeight:600,letterSpacing:"0.08em"}}>IMPOSTAZIONI</span>
+            <button onClick={onClose} style={{background:"transparent",border:"none",color:C.sub,fontSize:22,cursor:"pointer",lineHeight:1}} aria-label="Chiudi impostazioni">{"X"}</button>
+          </div>
+          <div style={{marginBottom:20}}>
+            <div style={{fontSize:10,color:C.sub,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:10}}>{"1R = $ - valore fisso in dollari"}</div>
+            <input type="number" value={val} onChange={function(e){setVal(e.target.value);}} min="1" step="25" style={{width:"100%",background:C.card,border:"1px solid "+C.border,borderRadius:4,color:C.text,fontSize:22,fontWeight:700,padding:"12px 16px",fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}/>
+            <div style={{fontSize:10,color:C.sub,marginTop:8}}>{"Default $250 - Aggiorna ad ogni nuovo conto prop"}</div>
+            <div style={{fontSize:10,color:C.sub,marginTop:4}}>{"Esempio: +$500 -> "+(500/(Number(val)||250)).toFixed(2)+"R"}</div>
+          </div>
+          <div style={{display:"flex",gap:10}}>
+            <button onClick={function(){onSave(Number(val)||R_DEFAULT);}} style={{padding:"10px 26px",background:"transparent",border:"1px solid "+C.gold,borderRadius:4,color:C.gold,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.12em",textTransform:"uppercase"}}>SALVA</button>
+            <button onClick={onClose} style={{fontSize:11,color:C.sub,background:"transparent",border:"none",cursor:"pointer",fontFamily:"inherit"}}>Annulla</button>
+          </div>
+
+          <div style={{borderTop:"1px solid "+C.border,marginTop:24,paddingTop:20}}>
+            <div style={{fontSize:11,color:C.text,fontWeight:700,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Data & Backup</div>
+            <div style={{fontSize:10,color:C.sub,lineHeight:1.6,marginBottom:14}}>Journal data is stored locally in this browser. Export a backup to protect or move your data.</div>
+            <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+              <button onClick={exportBackup} style={actionButton}>EXPORT BACKUP</button>
+              <label style={actionButton}>
+                RESTORE BACKUP
+                <input type="file" accept=".json,application/json" onChange={selectRestoreFile} style={{display:"none"}}/>
+              </label>
+            </div>
+            <div style={{fontSize:9,color:C.sub,lineHeight:1.5,marginTop:11}}>Restore replaces all current local Journal data. Other browser data is not touched.</div>
+            {backupStatus && <div role="status" style={{fontSize:10,color:C.green,lineHeight:1.5,marginTop:12}}>{backupStatus}</div>}
+            {backupError && <div role="alert" style={{fontSize:10,color:C.red,lineHeight:1.5,marginTop:12}}>{backupError}</div>}
+          </div>
         </div>
       </div>
-    </div>
+      {restoreCandidate && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.94)",zIndex:1100,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} role="dialog" aria-modal="true" aria-label="Restore Journal Backup">
+          <div style={{background:C.panel,border:"1px solid "+C.gold,borderRadius:8,padding:24,width:"100%",maxWidth:460}}>
+            <div style={{fontSize:15,color:C.text,fontWeight:700,letterSpacing:"0.07em",textTransform:"uppercase",marginBottom:14}}>Restore Journal Backup?</div>
+            <div style={{fontSize:11,color:C.sub,lineHeight:1.7,marginBottom:15}}>This will replace the current Journal data with the selected backup.</div>
+            <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:6,padding:"12px 14px",marginBottom:15}}>
+              <div style={{fontSize:9,color:C.sub,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:6}}>Backup date</div>
+              <div style={{fontSize:12,color:C.text,marginBottom:10}}>{new Date(restoreCandidate.backup.exportedAt).toLocaleString("it-IT")}</div>
+              <div style={{display:"flex",gap:24,flexWrap:"wrap"}}>
+                <div><span style={{fontSize:9,color:C.sub,textTransform:"uppercase"}}>Items </span><span style={{fontSize:12,color:C.text,fontWeight:700}}>{restoreCandidate.backup.itemCount}</span></div>
+                <div style={{minWidth:0}}><span style={{fontSize:9,color:C.sub,textTransform:"uppercase"}}>File </span><span style={{fontSize:10,color:C.text,overflowWrap:"anywhere"}}>{restoreCandidate.fileName}</span></div>
+              </div>
+            </div>
+            <div style={{fontSize:11,color:C.red,fontWeight:700,lineHeight:1.5,marginBottom:18}}>Current Journal data will be replaced.</div>
+            <div style={{display:"flex",justifyContent:"flex-end",gap:10}}>
+              <button onClick={function(){setRestoreCandidate(null);}} disabled={restoreBusy} style={{padding:"10px 16px",background:"transparent",border:"1px solid "+C.border,borderRadius:4,color:C.sub,fontSize:10,fontFamily:"inherit",cursor:restoreBusy?"default":"pointer",letterSpacing:"0.1em"}}>CANCEL</button>
+              <button onClick={confirmRestore} disabled={restoreBusy} style={{padding:"10px 18px",background:C.red,border:"1px solid "+C.red,borderRadius:4,color:C.text,fontSize:10,fontFamily:"inherit",cursor:restoreBusy?"default":"pointer",fontWeight:700,letterSpacing:"0.1em"}}>{restoreBusy?"RESTORING...":"RESTORE"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 

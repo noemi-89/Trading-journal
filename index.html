@@ -13,6 +13,12 @@
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: #0F0F13; }
     ::-webkit-scrollbar-thumb { background: #242430; border-radius: 3px; }
+    .execution-content-grid { display: grid; grid-template-columns: minmax(0, 1.9fr) minmax(290px, 0.78fr); gap: 12px; align-items: start; }
+    .execution-impact-panel { position: sticky; top: 12px; }
+    @media (max-width: 900px) {
+      .execution-content-grid { grid-template-columns: minmax(0, 1fr); }
+      .execution-impact-panel { position: static; grid-row: 1; }
+    }
   </style>
 </head>
 <body>
@@ -888,6 +894,113 @@ function calcExecutionReviewSummary(reviews, trades) {
     totalDecisionRLost:lost + compliantLost,
     netDecisionImpact:net + compliantNet,
   };
+}
+function executionDecisionImpactForRow(row) {
+  if (!row || !row.review || !row.metrics) return null;
+  const impact = row.review.planCompliant === "YES" ? row.metrics.compliantDecisionValue : row.metrics.executionImpact;
+  return impact != null && isFinite(impact) ? impact : null;
+}
+function executionImpactGroupLabel(row) {
+  if (!row || !row.review) return "Other";
+  if (row.review.planCompliant === "NO") return row.review.deviationType || row.review.reason || "Other deviation";
+  return row.review.reason || "Plan-compliant decision";
+}
+function calcExecutionImpactGroups(rows) {
+  const groups = {};
+  (rows || []).forEach(function(row){
+    const impact = executionDecisionImpactForRow(row);
+    if (impact == null) return;
+    const label = executionImpactGroupLabel(row);
+    if (!groups[label]) groups[label] = {label:label,count:0,helpfulCount:0,harmfulCount:0,neutralCount:0,gainedR:0,lostR:0,netR:0};
+    const group = groups[label];
+    group.count++;
+    group.netR += impact;
+    if (impact > 0.0000001) { group.helpfulCount++; group.gainedR += impact; }
+    else if (impact < -0.0000001) { group.harmfulCount++; group.lostR += Math.abs(impact); }
+    else group.neutralCount++;
+  });
+  return Object.keys(groups).map(function(key){ return groups[key]; });
+}
+function ExecutionImpactChart({groups, mode, onModeChange}) {
+  const isR = mode === "R";
+  const ordered = (groups || []).slice().sort(function(a,b){
+    const av = isR ? a.gainedR + a.lostR : a.count;
+    const bv = isR ? b.gainedR + b.lostR : b.count;
+    return bv - av || a.label.localeCompare(b.label);
+  });
+  let maxSide = 0;
+  ordered.forEach(function(group){
+    const negative = isR ? group.lostR : group.harmfulCount;
+    const positive = isR ? group.gainedR : group.helpfulCount;
+    maxSide = Math.max(maxSide, negative, positive);
+  });
+  const totalMeasured = ordered.reduce(function(total,group){ return total + group.count; },0);
+  const totalNet = ordered.reduce(function(total,group){ return total + group.netR; },0);
+  const totalNetColor = totalNet < -0.0000001 ? C.red : totalNet > 0.0000001 ? C.green : C.sub;
+  function barWidth(value) {
+    if (!value || !maxSide) return "0%";
+    return Math.max(3, Math.min(100, value / maxSide * 100)) + "%";
+  }
+  function sideValue(value) {
+    return isR ? value.toFixed(2) + "R" : String(value);
+  }
+  const modeButton = function(active){ return {height:30,padding:"0 10px",background:active?C.gold+"20":"transparent",border:"none",color:active?C.gold:C.sub,fontSize:9,fontWeight:700,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.08em"}; };
+  return (
+    <aside className="execution-impact-panel" style={{background:C.panel,border:"1px solid "+C.border,borderRadius:7,padding:"15px 14px"}}>
+      <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:12,flexWrap:"wrap",marginBottom:16}}>
+        <div style={{minWidth:0}}>
+          <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:20,fontWeight:700,color:C.text,letterSpacing:"0.06em",textTransform:"uppercase",lineHeight:1.1}}>Impact By Behavior</div>
+          <div style={{fontSize:9,color:C.sub,letterSpacing:"0.08em",textTransform:"uppercase",marginTop:5}}>Measured decisions only</div>
+        </div>
+        <div style={{display:"flex",flex:"0 0 auto",border:"1px solid "+C.border,borderRadius:4,overflow:"hidden"}} aria-label="Chart metric">
+          <button onClick={function(){onModeChange("R");}} aria-pressed={isR} style={modeButton(isR)}>R</button>
+          <button onClick={function(){onModeChange("COUNT");}} aria-pressed={!isR} style={modeButton(!isR)}>OCCURRENCES</button>
+        </div>
+      </div>
+      {!ordered.length && (
+        <div style={{border:"1px dashed "+C.border,borderRadius:5,padding:"34px 14px",textAlign:"center",fontSize:10,color:C.sub,lineHeight:1.6}}>No measured decisions for these filters.</div>
+      )}
+      {!!ordered.length && (
+        <>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,fontSize:8,color:C.sub,letterSpacing:"0.09em",textTransform:"uppercase",marginBottom:9}}>
+            <span style={{textAlign:"right"}}>{isR?"R Lost":"Harmful"}</span>
+            <span>{isR?"R Saved":"Helpful"}</span>
+          </div>
+          <div style={{display:"grid",gap:14}}>
+            {ordered.map(function(group){
+              const negative = isR ? group.lostR : group.harmfulCount;
+              const positive = isR ? group.gainedR : group.helpfulCount;
+              const netColor = group.netR < -0.0000001 ? C.red : group.netR > 0.0000001 ? C.green : C.sub;
+              return (
+                <div key={group.label} style={{minWidth:0}}>
+                  <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:10,marginBottom:6}}>
+                    <span style={{minWidth:0,fontSize:10,color:C.text,fontWeight:700,lineHeight:1.25,overflowWrap:"anywhere"}}>{group.label}</span>
+                    <span style={{flex:"0 0 auto",fontSize:9,color:C.sub}}><span style={{color:netColor,fontWeight:700}}>{fmtR(group.netR)}</span>{" | "+group.count}</span>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",height:12,gap:2}}>
+                    <div style={{display:"flex",justifyContent:"flex-end",alignItems:"stretch",borderRight:"1px solid "+C.border}} title={(isR?"R lost: ":"Harmful decisions: ")+sideValue(negative)}>
+                      <div style={{width:barWidth(negative),background:C.red,borderRadius:"2px 0 0 2px"}}/>
+                    </div>
+                    <div style={{display:"flex",alignItems:"stretch"}} title={(isR?"R saved: ":"Helpful decisions: ")+sideValue(positive)}>
+                      <div style={{width:barWidth(positive),background:C.green,borderRadius:"0 2px 2px 0"}}/>
+                    </div>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,fontSize:8,color:C.sub,marginTop:4}}>
+                    <span style={{textAlign:"right",color:negative?C.red:C.sub}}>{sideValue(negative)}</span>
+                    <span style={{color:positive?C.green:C.sub}}>{sideValue(positive)}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,borderTop:"1px solid "+C.border,marginTop:16,paddingTop:11,fontSize:9,color:C.sub}}>
+            <span>{totalMeasured+" measured"}</span>
+            <span>Net <strong style={{color:totalNetColor}}>{fmtR(totalNet)}</strong></span>
+          </div>
+        </>
+      )}
+    </aside>
+  );
 }
 function formatExecutionDate(dateStr) {
   const p = String(dateStr || "").split("-");
@@ -2362,6 +2475,7 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
   const [formError, setFormError] = useState("");
   const [flash, setFlash] = useState("");
   const [filters, setFilters] = useState({compliance:"ALL",instrument:"ALL",deviation:"ALL",reason:"ALL",from:"",to:""});
+  const [impactChartMode, setImpactChartMode] = useState("R");
 
   useEffect(function(){
     (async function(){
@@ -2501,6 +2615,7 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
     return true;
   });
   const summary = calcExecutionReviewSummary(visibleRows.map(function(row){ return row.review; }), trades);
+  const impactGroups = calcExecutionImpactGroups(summary.rows);
 
   const reviewedTradeIds = {};
   reviews.forEach(function(review){ if (review.id !== editingId) reviewedTradeIds[review.linkedTradeId] = true; });
@@ -2585,13 +2700,14 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
         <div><span style={labelStyle}>To</span><input type="date" value={filters.to} onChange={function(e){setFilter("to",e.target.value);}} style={inputStyle}/></div>
       </div>
 
-      {!reviews.length && (
-        <div style={{border:"1px dashed "+C.border,borderRadius:6,padding:"46px 20px",textAlign:"center",color:C.sub,fontSize:12}}>No Execution Reviews yet.</div>
-      )}
-      {!!reviews.length && !visibleRows.length && (
-        <div style={{border:"1px dashed "+C.border,borderRadius:6,padding:"34px 20px",textAlign:"center",color:C.sub,fontSize:12}}>No reviews match these filters.</div>
-      )}
-      <div style={{display:"grid",gap:10}}>
+      <div className="execution-content-grid">
+        <div style={{display:"grid",gap:10,minWidth:0}}>
+          {!reviews.length && (
+            <div style={{border:"1px dashed "+C.border,borderRadius:6,padding:"46px 20px",textAlign:"center",color:C.sub,fontSize:12}}>No Execution Reviews yet.</div>
+          )}
+          {!!reviews.length && !visibleRows.length && (
+            <div style={{border:"1px dashed "+C.border,borderRadius:6,padding:"34px 20px",textAlign:"center",color:C.sub,fontSize:12}}>No reviews match these filters.</div>
+          )}
         {visibleRows.map(function(row){
           const review = row.review; const trade = row.trade; const metrics = row.metrics;
           const isCompliant = review.planCompliant === "YES";
@@ -2632,6 +2748,8 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
             </div>
           );
         })}
+        </div>
+        <ExecutionImpactChart groups={impactGroups} mode={impactChartMode} onModeChange={setImpactChartMode}/>
       </div>
 
       {formOpen && (

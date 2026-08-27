@@ -55,6 +55,9 @@ vm.runInContext([
   "executionTradeShouldNotExist",
   "deriveExecutionReview",
   "calcExecutionReviewSummary",
+  "executionDecisionImpactForRow",
+  "executionImpactGroupLabel",
+  "calcExecutionImpactGroups",
 ].map(extractFunction).join("\n"), context);
 
 function approx(actual, expected, label) {
@@ -261,6 +264,39 @@ function testOvertradingNeverShouldExist() {
   approx(result.planCompliantR, 0, "overtrading plan R");
   approx(result.executionImpact, 1.5, "overtrading winner impact");
 }
+function testExecutionImpactGroupsUseUnifiedDecisionValue() {
+  const harmfulTrade = makeTrade("chart-harm", "2026-08-25", "Buy", 100, 90, 105);
+  const helpfulTrade = makeTrade("chart-help", "2026-08-26", "Buy", 100, 90, 120);
+  const compliantTrade = makeTrade("chart-compliant", "2026-08-27", "Buy", 100, 90, 105);
+  const reviews = [
+    makeReview("chart-r1", harmfulTrade.id, {deviationType:"Early Exit",reason:"Fear",planCompliantExitPrice:110}),
+    makeReview("chart-r2", helpfulTrade.id, {deviationType:"Early Exit",reason:"Fear",planCompliantExitPrice:110}),
+    makeReview("chart-r3", compliantTrade.id, {planCompliant:"YES",reason:"Probable Invalidation",withoutInterventionExitPrice:90}),
+  ];
+  const summary = context.calcExecutionReviewSummary(reviews, [harmfulTrade,helpfulTrade,compliantTrade]);
+  const groups = context.calcExecutionImpactGroups(summary.rows);
+  const earlyExit = groups.find(function(group){ return group.label === "Early Exit"; });
+  const invalidation = groups.find(function(group){ return group.label === "Probable Invalidation"; });
+  assert.strictEqual(groups.length, 2);
+  assert.strictEqual(earlyExit.count, 2);
+  assert.strictEqual(earlyExit.helpfulCount, 1);
+  assert.strictEqual(earlyExit.harmfulCount, 1);
+  approx(earlyExit.gainedR, 1, "chart early exit gained");
+  approx(earlyExit.lostR, 0.5, "chart early exit lost");
+  approx(earlyExit.netR, 0.5, "chart early exit net");
+  assert.strictEqual(invalidation.count, 1);
+  approx(invalidation.gainedR, 1.5, "chart compliant gained");
+  approx(groups.reduce(function(total,group){ return total + group.netR; },0), summary.netDecisionImpact, "chart net matches summary");
+}
+function testExecutionImpactGroupsSkipUnmeasuredReviews() {
+  const trade = makeTrade("chart-missing", "2026-08-27", "Buy", 100, null, 105);
+  delete trade.initial_stop_price;
+  const review = makeReview("chart-r4", trade.id, {deviationType:"Early Exit",reason:"Fear",planCompliantExitPrice:110});
+  const summary = context.calcExecutionReviewSummary([review], [trade]);
+  assert.strictEqual(summary.reviewedTrades, 1);
+  assert.strictEqual(summary.measuredDecisions, 0);
+  assert.strictEqual(context.calcExecutionImpactGroups(summary.rows).length, 0);
+}
 
 testLongEarlyExit();
 testShortEarlyExit();
@@ -281,5 +317,7 @@ testUnifiedDecisionSummary();
 testCompliantDecisionMissingStop();
 testCompliantDecisionReactsToInitialStopEdit();
 testOvertradingNeverShouldExist();
+testExecutionImpactGroupsUseUnifiedDecisionValue();
+testExecutionImpactGroupsSkipUnmeasuredReviews();
 
 console.log("OK - Execution Review tests passed");

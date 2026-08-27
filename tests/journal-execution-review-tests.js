@@ -297,6 +297,9 @@ function testExecutionImpactGroupsSkipUnmeasuredReviews() {
   assert.strictEqual(summary.measuredDecisions, 0);
   assert.strictEqual(context.calcExecutionImpactGroups(summary.rows).length, 0);
 }
+function testEsNqDivergenceReasonAvailable() {
+  assert(html.includes('"ES-NQ Divergence"'), "ES-NQ Divergence must be available in Execution reasons");
+}
 
 testLongEarlyExit();
 testShortEarlyExit();
@@ -319,5 +322,6 @@ testCompliantDecisionReactsToInitialStopEdit();
 testOvertradingNeverShouldExist();
 testExecutionImpactGroupsUseUnifiedDecisionValue();
 testExecutionImpactGroupsSkipUnmeasuredReviews();
+testEsNqDivergenceReasonAvailable();
 
 console.log("OK - Execution Review tests passed");

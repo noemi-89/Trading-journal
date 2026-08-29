@@ -124,6 +124,17 @@ function getTradeResult(t) {
   if (Math.abs(pnl) <= BE_THRESHOLD_DOLLARS) return "BE";
   return pnl > 0 ? "Win" : pnl < 0 ? "Loss" : "BE";
 }
+function tradeChronologyKey(t) {
+  const date = String(t && t.date || "");
+  const entry = String(t && t.entry_time || "00:00").padStart(5,"0");
+  const exit = String(t && t.exit_time || "00:00").padStart(5,"0");
+  return date + "T" + entry + "T" + exit + "T" + String(t && t.id || "");
+}
+function sortTradesChronologically(trades) {
+  return (trades || []).slice().sort(function(a,b){
+    return tradeChronologyKey(a).localeCompare(tradeChronologyKey(b));
+  });
+}
 function calcWinRatePercent(wins, losses) {
   return wins + losses ? wins / (wins + losses) * 100 : 0;
 }
@@ -1284,10 +1295,15 @@ function calcStats(trades, rv) {
   const pf   = gl ? gw / gl : gw > 0 ? 99 : 0;
   const totalR = closed.reduce(function(s,t){return s+calcR(t.pnl_dollars,rv);},0);
   const totalD = closed.reduce(function(s,t){return s+(t.pnl_dollars||0);},0);
+  const chronological = closed.slice().sort(function(a,b){
+    const aKey = String(a && a.date || "") + "T" + String(a && a.entry_time || "00:00").padStart(5,"0") + "T" + String(a && a.exit_time || "00:00").padStart(5,"0") + "T" + String(a && a.id || "");
+    const bKey = String(b && b.date || "") + "T" + String(b && b.entry_time || "00:00").padStart(5,"0") + "T" + String(b && b.exit_time || "00:00").padStart(5,"0") + "T" + String(b && b.id || "");
+    return aKey.localeCompare(bKey);
+  });
   let mxW=0,mxL=0,cW=0,cL=0;
-  closed.forEach(function(t){const res=getTradeResult(t);if(res==="Win"){cW++;cL=0;mxW=Math.max(mxW,cW);}else if(res==="Loss"){cL++;cW=0;mxL=Math.max(mxL,cL);}else{cW=0;cL=0;}});
-  const rev=[...closed].reverse(); let pk=0,maxDD=0,cum=0;
-  rev.forEach(function(t){cum+=calcR(t.pnl_dollars,rv);if(cum>pk)pk=cum;const dd=pk-cum;if(dd>maxDD)maxDD=dd;});
+  chronological.forEach(function(t){const res=getTradeResult(t);if(res==="Win"){cW++;cL=0;mxW=Math.max(mxW,cW);}else if(res==="Loss"){cL++;cW=0;mxL=Math.max(mxL,cL);}else{cW=0;cL=0;}});
+  let pk=0,maxDD=0,cum=0;
+  chronological.forEach(function(t){cum+=calcR(t.pnl_dollars,rv);if(cum>pk)pk=cum;const dd=pk-cum;if(dd>maxDD)maxDD=dd;});
   const wDur = wins.filter(function(t){return t.duration!=null;});
   const lDur = losses.filter(function(t){return t.duration!=null;});
   return {
@@ -1768,7 +1784,7 @@ function DayTradeList({trades, rv, date, onUpdateInitialStop}) {
 
 // EQUITY CURVE
 function EquityCurve({trades, rv, showOnlyR}) {
-  const closed = [...trades].filter(function(t){return getTradeResult(t)!=="Open";}).reverse();
+  const closed = sortTradesChronologically((trades || []).filter(function(t){return getTradeResult(t)!=="Open";}));
   if (closed.length < 2) return null;
   const pts = [0]; let cum = 0;
   closed.forEach(function(t){ cum += calcR(t.pnl_dollars, rv); pts.push(parseFloat(cum.toFixed(2))); });

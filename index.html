@@ -1315,6 +1315,36 @@ function calcStats(trades, rv) {
     avgDurL: lDur.length ? lDur.reduce(function(s,t){return s+t.duration;},0)/lDur.length : null,
   };
 }
+function calcPerformanceExtremes(trades, rv) {
+  const closed = sortTradesChronologically((trades || []).filter(function(t){ return getTradeResult(t) !== "Open"; }));
+  if (!closed.length) return null;
+  function tradeMetric(trade) {
+    const dollars = Number(trade && trade.pnl_dollars || 0);
+    return { trade:trade, date:String(trade && trade.date || ""), dollars:dollars, r:calcR(dollars,rv) };
+  }
+  let bestTrade = tradeMetric(closed[0]);
+  let worstTrade = tradeMetric(closed[0]);
+  const daily = {};
+  closed.forEach(function(trade){
+    const metric = tradeMetric(trade);
+    if (metric.dollars > bestTrade.dollars) bestTrade = metric;
+    if (metric.dollars < worstTrade.dollars) worstTrade = metric;
+    if (!daily[metric.date]) daily[metric.date] = { date:metric.date, dollars:0, count:0 };
+    daily[metric.date].dollars += metric.dollars;
+    daily[metric.date].count++;
+  });
+  const days = Object.keys(daily).sort().map(function(date){
+    const item = daily[date];
+    return { date:item.date, dollars:item.dollars, r:calcR(item.dollars,rv), count:item.count };
+  });
+  let bestDay = days[0];
+  let worstDay = days[0];
+  days.forEach(function(day){
+    if (day.dollars > bestDay.dollars) bestDay = day;
+    if (day.dollars < worstDay.dollars) worstDay = day;
+  });
+  return { bestTrade:bestTrade, worstTrade:worstTrade, bestDay:bestDay, worstDay:worstDay };
+}
 function groupBy(trades, fn, rv) {
   const g = {};
   trades.forEach(function(t) { const k = fn(t); if (!g[k]) g[k] = []; g[k].push(t); });
@@ -2136,6 +2166,7 @@ function CalendarioView({trades, rv, onImport, onExport, onTWImport, ohlcMeta, s
 // DASHBOARD
 function Dashboard({trades, rv, ohlcData, ohlcNQ, showOnlyR, onToggleR, onOpenInitialStops}) {
   const m = calcStats(trades, rv);
+  const extremes = calcPerformanceExtremes(trades, rv);
   const mmStats = calcMaeMfeStats(trades, ohlcData, ohlcNQ);
   if (!m) return <div style={{textAlign:"center",padding:"60px 20px",color:C.sub,fontSize:13}}>Nessun trade. Importa il primo CSV dal tab Calendario.</div>;
   const byFascia = groupBy(trades, function(t){ return getFascia(t.entry_time||""); }, rv);
@@ -2147,6 +2178,21 @@ function Dashboard({trades, rv, ohlcData, ohlcNQ, showOnlyR, onToggleR, onOpenIn
   const rfC  = m.rf>=3?C.green:m.rf>=1.5?C.gold:C.red;
   const evC  = m.ev>=0?C.green:C.red;
   const totC = m.totalR>=0?C.green:C.red;
+  function tradeExtremeSub(item) {
+    const details = [];
+    if (!showOnlyR) details.push(fmtD(item.dollars));
+    details.push(formatExecutionDate(item.date));
+    if (item.trade && item.trade.product) details.push(item.trade.product);
+    if (item.trade && item.trade.entry_time) details.push(item.trade.entry_time);
+    return details.join(" · ");
+  }
+  function dayExtremeSub(item) {
+    const details = [];
+    if (!showOnlyR) details.push(fmtD(item.dollars));
+    details.push(formatExecutionDate(item.date));
+    details.push(item.count + " trade");
+    return details.join(" · ");
+  }
   return (
     <div>
       <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
@@ -2171,6 +2217,12 @@ function Dashboard({trades, rv, ohlcData, ohlcNQ, showOnlyR, onToggleR, onOpenIn
         <MetricCard label="Max Streak Win"  value={String(m.maxConsecW)} sub="consecutivi" color={C.green}/>
         <MetricCard label="Max Streak Loss" value={String(m.maxConsecL)} sub="consecutivi" color={C.red}/>
         <MetricCard label="W / L / BE"      value={m.w+" / "+m.l+" / "+m.be} color={C.sub}/>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:14}}>
+        <MetricCard label="Best Trade" value={fmtR(extremes.bestTrade.r)} sub={tradeExtremeSub(extremes.bestTrade)} color={extremes.bestTrade.dollars>=0?C.green:C.red}/>
+        <MetricCard label="Worst Trade" value={fmtR(extremes.worstTrade.r)} sub={tradeExtremeSub(extremes.worstTrade)} color={extremes.worstTrade.dollars<=0?C.red:C.green}/>
+        <MetricCard label="Best Trading Day" value={fmtR(extremes.bestDay.r)} sub={dayExtremeSub(extremes.bestDay)} color={extremes.bestDay.dollars>=0?C.green:C.red}/>
+        <MetricCard label="Worst Trading Day" value={fmtR(extremes.worstDay.r)} sub={dayExtremeSub(extremes.worstDay)} color={extremes.worstDay.dollars<=0?C.red:C.green}/>
       </div>
       <EquityCurve trades={trades} rv={rv} showOnlyR={showOnlyR}/>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>

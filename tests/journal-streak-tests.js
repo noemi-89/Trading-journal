@@ -59,6 +59,7 @@ vm.runInContext([
   "sortTradesChronologically",
   "calcWinRatePercent",
   "calcStats",
+  "calcPerformanceExtremes",
 ].map(extractFunction).join("\n"), context);
 
 function trade(id, date, time, pnl) {
@@ -96,7 +97,32 @@ function testBreakevenAndWinBreakLossStreak() {
   assert.strictEqual(stats.maxConsecL, 2);
 }
 
+function testBestWorstTradesAndDays() {
+  const trades = [
+    trade("d3w", "2026-08-03", "10:00", 100),
+    trade("d1w", "2026-08-01", "09:30", 200),
+    trade("d2l", "2026-08-02", "11:00", -200),
+    trade("d3l", "2026-08-03", "09:30", -800),
+    trade("d1l", "2026-08-01", "10:00", -50),
+    trade("d2w", "2026-08-02", "09:30", 700),
+  ];
+  const extremes = context.calcPerformanceExtremes(trades, 500);
+  assert.strictEqual(extremes.bestTrade.trade.id, "d2w");
+  assert.strictEqual(extremes.bestTrade.r, 1.4);
+  assert.strictEqual(extremes.worstTrade.trade.id, "d3l");
+  assert.strictEqual(extremes.worstTrade.r, -1.6);
+  assert.strictEqual(extremes.bestDay.date, "2026-08-02");
+  assert.strictEqual(extremes.bestDay.dollars, 500);
+  assert.strictEqual(extremes.bestDay.r, 1);
+  assert.strictEqual(extremes.bestDay.count, 2);
+  assert.strictEqual(extremes.worstDay.date, "2026-08-03");
+  assert.strictEqual(extremes.worstDay.dollars, -700);
+  assert.strictEqual(extremes.worstDay.r, -1.4);
+  assert.strictEqual(extremes.worstDay.count, 2);
+}
+
 testStreakUsesChronologyInsteadOfStorageOrder();
 testBreakevenAndWinBreakLossStreak();
+testBestWorstTradesAndDays();
 
 console.log("OK - Journal streak tests passed");

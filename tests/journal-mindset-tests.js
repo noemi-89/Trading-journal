@@ -13,6 +13,8 @@ async function main() {
     const view=e.mount("Journal"); await view.flush();
     assert.equal(text(find(view,n=>n.props.className==="journal-trade-count")),"1 trade");
     assert.equal(text(find(view,n=>n.props.className==="journal-motto")),"VICTORY BELONGS TO THE MOST TENACIOUS.");
+    const header=find(view,n=>n.props.className==="journal-header");
+    assert.deepEqual(header.props.children.map(n=>n.props.className),["journal-identity","journal-motto","journal-settings"]);
     for(const legacy of ["ES FUTURES JOURNAL","1R = $","ES OHLC","NQ OHLC"]) assert.ok(!text(view.tree).includes(legacy));
     button(view,"CHAMPION MINDSET").props.onClick(); await view.flush();
     find(view,n=>n.type===e.context.ChampionMindsetView);
@@ -36,17 +38,21 @@ async function main() {
     assert.equal(c.mindsetShiftMonth("2026-01-31",-1),"2025-12-31");
     assert.equal(c.mindsetDateFromDay(c.mindsetDayNumber("2026-10-25")+1),"2026-10-26");
   });
-  await test("All five exact statements and authors render without notes or analytics",async()=>{
+  await test("All six exact statements and authors render left of the wheel without notes or analytics",async()=>{
     const e=environment(),view=e.mount("ChampionMindsetView");await view.flush();
     const expected=[
       "VICTORY BELONGS TO THE MOST TENACIOUS.","PRESSURE IS A PRIVILEGE.",
-      "CHAMPIONS ARE DEFINED BY HOW THEY RECOVER.","REST AT THE END, NOT IN THE MIDDLE.","FIRST, YOU HAVE TO FINISH."
+      "CHAMPIONS ARE DEFINED BY HOW THEY RECOVER.","REST AT THE END, NOT IN THE MIDDLE.","FIRST, YOU HAVE TO FINISH.",
+      "NO MATTER WHAT HAPPENS, WE ARE BULLISH ON LIFE."
     ];
     assert.deepEqual(nodes(view.tree).filter(n=>n.props.className==="mindset-quote-text").map(text),expected);
     assert.deepEqual(nodes(view.tree).filter(n=>n.props.className==="mindset-author").map(text),[
-      "\u2014 Roland-Garros","\u2014 Billie Jean King","\u2014 Serena Williams","\u2014 Kobe Bryant","\u2014 Michael Schumacher"
+      "\u2014 Roland-Garros","\u2014 Billie Jean King","\u2014 Serena Williams","\u2014 Kobe Bryant","\u2014 Michael Schumacher","\u2014 Noemi"
     ]);
-    assert.equal(radios(view).length,5);assert.deepEqual(selected(view),[]);
+    assert.equal(radios(view).length,6);assert.deepEqual(selected(view),[]);
+    const layout=find(view,n=>n.props.className==="mindset-layout");
+    assert.equal(layout.props.children[0].props.className,"mindset-quotes");
+    assert.equal(layout.props.children[1].type,e.context.MindsetDateWheel);
     assert.equal(find(view,n=>n.type===e.context.MindsetDateWheel).props.value,today(e));
     assert.ok(!nodes(view.tree).some(n=>n.type==="textarea"||n.type===e.context.MetricCard));
     assert.equal(e.target.writes,0);
@@ -71,6 +77,17 @@ async function main() {
     chooseDate(e,view,"2026-09-05");await view.flush();assert.deepEqual(selected(view),[]);
     radios(view)[0].props.onChange();await view.flush();
     assert.deepEqual(JSON.parse(e.target.values[KEY]),{...stored,"2026-09-05":"tenacity"});
+  });
+  await test("Noemi's quote persists and preserves every previously supported quote ID",async()=>{
+    const legacy={"2026-01-01":"tenacity","2026-01-02":"pressure","2026-01-03":"recovery","2026-01-04":"rest","2026-01-05":"finish"};
+    const e=environment({[KEY]:JSON.stringify(legacy)}),view=e.mount("ChampionMindsetView");await view.flush();
+    const date="2026-09-03";chooseDate(e,view,date);await view.flush();
+    radios(view)[5].props.onChange();await view.flush();
+    assert.deepEqual(JSON.parse(e.target.values[KEY]),{...legacy,[date]:"bullish_life"});
+    const reopened=e.mount("ChampionMindsetView");await reopened.flush();
+    chooseDate(e,reopened,date);await reopened.flush();assert.deepEqual(selected(reopened),["bullish_life"]);
+    radios(reopened)[0].props.onChange();await reopened.flush();
+    assert.deepEqual(JSON.parse(e.target.values[KEY]),{...legacy,[date]:"tenacity"});
   });
   await test("Saving a different date during a date change never selects the wrong statement",async()=>{
     const e=environment(),view=e.mount("ChampionMindsetView");await view.flush();
@@ -137,7 +154,7 @@ async function main() {
     assert.equal(find(view,n=>n.props.role==="option"&&n.props["aria-selected"]).props.id,"mindset-date-"+chosen);
   });
   await test("Backup and restore automatically include the new key losslessly",async()=>{
-    const e=environment({[KEY]:'{"2026-09-03":"pressure","2026-09-02":"rest"}',"jnl:v2:trades":"[]"});
+    const e=environment({[KEY]:'{"2026-09-03":"bullish_life","2026-09-02":"rest"}',"jnl:v2:trades":"[]"});
     const prepare=s=>{Object.defineProperty(s,"length",{get(){return Object.keys(s.values).length;}});s.key=i=>Object.keys(s.values)[i]??null;return s;};
     prepare(e.target);
     const backup=e.context.createJournalBackup(e.target,"2026-09-03T12:00:00.000Z");

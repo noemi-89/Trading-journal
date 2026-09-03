@@ -15,6 +15,13 @@
     ::-webkit-scrollbar-thumb { background: #242430; border-radius: 3px; }
     .execution-content-grid { display: grid; grid-template-columns: minmax(0, 1.9fr) minmax(290px, 0.78fr); gap: 12px; align-items: start; }
     .execution-impact-panel { position: sticky; top: 12px; }
+    .dashboard-metrics { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); }
+    .dashboard-pair { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
+    .metric-card { min-width: 0; overflow-wrap: anywhere; }
+    @media (max-width: 600px) {
+      .dashboard-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
+      .dashboard-pair { grid-template-columns: minmax(0,1fr); }
+    }
     @media (max-width: 900px) {
       .execution-content-grid { grid-template-columns: minmax(0, 1fr); }
       .execution-impact-panel { position: static; grid-row: 1; }
@@ -24,21 +31,98 @@
 <body>
   <div id="root"></div>
   <script type="text/babel">
-    const { useState, useEffect } = React;
+    const { useState, useEffect, useRef } = React;
 
     // localStorage shim - persistent browser storage
     const storage = {
       get: async function(key) {
-        try { const v = localStorage.getItem(key); return v ? { value: v } : null; } catch(e) { return null; }
+        const v = localStorage.getItem(key);
+        return v == null ? null : { value: v };
       },
       set: async function(key, value) {
-        try { localStorage.setItem(key, value); return { key: key, value: value }; } catch(e) { return null; }
+        writeJournalEntries(localStorage, {[key]:value});
+        return { key: key, value: value };
       },
       delete: async function(key) {
-        try { localStorage.removeItem(key); return { key: key, deleted: true }; } catch(e) { return null; }
+        localStorage.removeItem(key);
+        return { key: key, deleted: true };
       }
     };
 
+// A candle import updates several keys; either all are saved or the old values return.
+function writeJournalEntries(target, entries) {
+  const keys = Object.keys(entries);
+  const before = {};
+  const written = [];
+  keys.forEach(function(key){ before[key] = target.getItem(key); });
+  try {
+    keys.forEach(function(key){
+      if (before[key] === entries[key]) return;
+      target.setItem(key, entries[key]);
+      written.push(key);
+      if (target.getItem(key) !== entries[key]) throw new Error("Verifica scrittura fallita");
+    });
+  } catch(error) {
+    let rollbackFailed = false;
+    written.reverse().forEach(function(key){
+      try {
+        if (before[key] == null) target.removeItem(key);
+        else target.setItem(key, before[key]);
+        if (target.getItem(key) !== before[key]) rollbackFailed = true;
+      } catch(e) { rollbackFailed = true; }
+    });
+    throw new Error(rollbackFailed
+      ? "Salvataggio e ripristino non riusciti. Non chiudere la pagina: esporta un backup e verifica i dati."
+      : "Salvataggio non riuscito: memoria del browser piena o non disponibile. I dati precedenti sono invariati.");
+  }
+}
+
+function validRValue(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0;
+}
+
+function useWeeklyDocument(key, emptyData) {
+  const [data, setData] = useState(emptyData);
+  const [loadedKey, setLoadedKey] = useState("");
+  const [error, setError] = useState("");
+  const [flash, setFlash] = useState("");
+  const currentKey = useRef(key);
+  const draft = useRef(emptyData);
+  const timer = useRef(null);
+  currentKey.current = key;
+  useEffect(function(){
+    let active = true;
+    setError(""); setFlash(""); setLoadedKey("");
+    (async function(){
+      try {
+        const stored = await storage.get(key);
+        const parsed = stored ? JSON.parse(stored.value) : emptyData;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Formato non valido");
+        if (active) { draft.current = parsed; setData(parsed); setLoadedKey(key); }
+      } catch(e) { if (active) setError("Lettura della settimana non riuscita. Nessun dato e stato sovrascritto."); }
+    })();
+    return function(){ active = false; clearTimeout(timer.current); };
+  }, [key]);
+  async function save(nextData) {
+    if (loadedKey !== key) return;
+    const payload = nextData || draft.current;
+    clearTimeout(timer.current);
+    setFlash("");
+    try {
+      await storage.set(key, JSON.stringify(payload));
+      if (currentKey.current !== key) return;
+      setError(""); setFlash("Salvato OK");
+      timer.current = setTimeout(function(){ setFlash(""); }, 1600);
+    } catch(e) { if (currentKey.current === key) { setFlash(""); setError(e.message); } }
+  }
+  function update(next) {
+    draft.current = next;
+    setData(next);
+    save(next);
+  }
+  return {data:data, update:update, save:save, flash:flash, error:error, ready:loadedKey === key};
+}
 
 const C = {
   bg:"#07070A", panel:"#0F0F13", card:"#16161B", card2:"#1C1C22",
@@ -807,13 +891,23 @@ function initialStopEditorDate(trades) {
   }
   return latest.date || null;
 }
+function withManualInitialStop(trade, value) {
+  const raw = String(value == null ? "" : value).trim();
+  const stop = raw === "" ? null : Number(raw);
+  if (stop != null && (!Number.isFinite(stop) || stop <= 0)) throw new Error("Inserisci un prezzo stop valido e positivo.");
+  const next = {...trade};
+  ["manual_initial_stop","initial_stop_manual","initial_stop_price","initial_stop","initial_sl_price","initial_sl","initial_stop_source"].forEach(function(key){ delete next[key]; });
+  if (stop != null) { next.initial_stop_price = stop; next.initial_stop_source = "manual"; }
+  return next;
+}
 function initialRiskPointsForTrade(trade) {
   const entry = Number(trade && trade.entry_price);
   const stopInfo = initialStopInfoForTrade(trade);
   const stop = stopInfo.price;
   if (!entry || !stop) return null;
   const dir = String(trade.direction || "").toLowerCase();
-  const risk = dir === "buy" ? entry - stop : stop - entry;
+  if (!["buy","long","sell","short"].includes(dir)) return null;
+  const risk = dir === "buy" || dir === "long" ? entry - stop : stop - entry;
   return risk > 0 ? risk : null;
 }
 function initialRiskUsdForTrade(trade) {
@@ -1292,9 +1386,9 @@ function calcStats(trades, rv) {
   const ev   = wr * avgW + (1 - wr) * avgL;
   const gw   = wR.reduce(function(a,b){return a+b;},0);
   const gl   = Math.abs(lR.reduce(function(a,b){return a+b;},0));
-  const pf   = gl ? gw / gl : gw > 0 ? 99 : 0;
+  const pf   = gl ? gw / gl : gw > 0 ? Infinity : 0;
   const totalR = closed.reduce(function(s,t){return s+calcR(t.pnl_dollars,rv);},0);
-  const totalD = closed.reduce(function(s,t){return s+(t.pnl_dollars||0);},0);
+  const totalD = closed.reduce(function(s,t){return s+Number(t.pnl_dollars||0);},0);
   const chronological = closed.slice().sort(function(a,b){
     const aKey = String(a && a.date || "") + "T" + String(a && a.entry_time || "00:00").padStart(5,"0") + "T" + String(a && a.exit_time || "00:00").padStart(5,"0") + "T" + String(a && a.id || "");
     const bKey = String(b && b.date || "") + "T" + String(b && b.entry_time || "00:00").padStart(5,"0") + "T" + String(b && b.exit_time || "00:00").padStart(5,"0") + "T" + String(b && b.id || "");
@@ -1311,8 +1405,8 @@ function calcStats(trades, rv) {
     wr:wr*100, avgW:avgW, avgL:avgL, ev:ev, pf:pf, totalR:totalR, totalD:totalD,
     maxConsecW:mxW, maxConsecL:mxL, maxDD:maxDD,
     rf: maxDD > 0 ? totalR / maxDD : totalR > 0 ? Infinity : 0,
-    avgDurW: wDur.length ? wDur.reduce(function(s,t){return s+t.duration;},0)/wDur.length : null,
-    avgDurL: lDur.length ? lDur.reduce(function(s,t){return s+t.duration;},0)/lDur.length : null,
+    avgDurW: wDur.length ? wDur.reduce(function(s,t){return s+Number(t.duration);},0)/wDur.length : null,
+    avgDurL: lDur.length ? lDur.reduce(function(s,t){return s+Number(t.duration);},0)/lDur.length : null,
   };
 }
 function calcPerformanceExtremes(trades, rv) {
@@ -1679,7 +1773,7 @@ function DurationAnalysis({trades, rv}) {
     const grp=closed.filter(function(t){return t.duration>=b.min&&t.duration<b.max;});
     const wins=grp.filter(function(t){return getTradeResult(t)==="Win";}).length;
     const losses=grp.filter(function(t){return getTradeResult(t)==="Loss";}).length;
-    const totalPnl=grp.reduce(function(s,t){return s+(t.pnl_dollars||0);},0);
+    const totalPnl=grp.reduce(function(s,t){return s+Number(t.pnl_dollars||0);},0);
     return {label:b.label,n:grp.length,wr:wins+losses?calcWinRatePercent(wins,losses):null,r:calcR(totalPnl,rv)};
   }).filter(function(b){return b.n>0;});
   if (!buckets.length) return null;
@@ -1687,7 +1781,7 @@ function DurationAnalysis({trades, rv}) {
   return(
     <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"16px 20px",marginBottom:14}}>
       <div style={{fontSize:13,color:C.text,letterSpacing:"0.11em",textTransform:"uppercase",marginBottom:14,fontWeight:700}}>Duration Analysis</div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
+      <div className="dashboard-pair" style={{gap:20}}>
         <div>
           <div style={{fontSize:12,color:C.gold,marginBottom:10,fontWeight:700}}>Win Rate per durata</div>
           {buckets.map(function(b,i){
@@ -1729,11 +1823,15 @@ function DurationAnalysis({trades, rv}) {
 function InitialStopField({trade, stopInfo, stopCol, onSave}) {
   const [value, setValue] = useState(stopInfo.price != null ? String(stopInfo.price) : "");
   const [flash, setFlash] = useState("");
+  const [error, setError] = useState("");
   useEffect(function(){ setValue(stopInfo.price != null ? String(stopInfo.price) : ""); }, [trade.id, stopInfo.price]);
   async function save(){
-    await onSave(trade.id, value);
-    setFlash("SALVATO");
-    setTimeout(function(){ setFlash(""); }, 1400);
+    setFlash(""); setError("");
+    try {
+      await onSave(trade.id, value);
+      setFlash("SALVATO");
+      setTimeout(function(){ setFlash(""); }, 1400);
+    } catch(e) { setError(e.message); }
   }
   return (
     <div style={{display:"flex",alignItems:"center",gap:7,marginTop:6,flexWrap:"wrap"}}>
@@ -1743,6 +1841,7 @@ function InitialStopField({trade, stopInfo, stopCol, onSave}) {
         style={{width:105,background:C.card,border:"1px solid "+C.blue+"50",borderRadius:4,color:C.text,fontSize:10,padding:"5px 7px",fontFamily:"inherit",outline:"none"}}/>
       <button onClick={save} style={{padding:"5px 9px",background:C.blue+"12",border:"1px solid "+C.blue+"60",borderRadius:4,color:C.blue,fontSize:9,fontFamily:"inherit",cursor:"pointer",fontWeight:700,letterSpacing:"0.06em",minWidth:68}}>{flash||"SALVA SL"}</button>
       <span style={{fontSize:8,color:stopCol,border:"1px solid "+stopCol+"50",borderRadius:4,padding:"2px 5px"}}>{stopInfo.label}</span>
+      {error && <span role="alert" style={{color:C.red,fontSize:10,flexBasis:"100%"}}>{error}</span>}
     </div>
   );
 }
@@ -1752,7 +1851,7 @@ function DayTradeList({trades, rv, date, onUpdateInitialStop}) {
   if (!trades||!trades.length) return null;
   const closed=trades.filter(function(t){return getTradeResult(t)!=="Open";});
   if (!closed.length) return null;
-  const totalPnl=closed.reduce(function(s,t){return s+(t.pnl_dollars||0);},0);
+  const totalPnl=closed.reduce(function(s,t){return s+Number(t.pnl_dollars||0);},0);
   const totalR=calcR(totalPnl,rv);
   const totCol=totalR>=0?C.green:C.red;
   const FASCIA_COL={"Gold Zone":C.gold,"Silver Zone":"#A8B8CC","Dead Zone":"#4A5060","Mid AM":C.blue,"Lunch":C.purple,"PM Post Lunch":"#E87830","PM Session":"#D055A0","Power Hour":C.green,"Altro":"#374050"};
@@ -1817,19 +1916,19 @@ function EquityCurve({trades, rv, showOnlyR}) {
   const closed = sortTradesChronologically((trades || []).filter(function(t){return getTradeResult(t)!=="Open";}));
   if (closed.length < 2) return null;
   const pts = [0]; let cum = 0;
-  closed.forEach(function(t){ cum += calcR(t.pnl_dollars, rv); pts.push(parseFloat(cum.toFixed(2))); });
+  closed.forEach(function(t){ cum += calcR(t.pnl_dollars, rv); pts.push(cum); });
   const mn=Math.min(...pts), mx=Math.max(...pts), rng=mx-mn||1;
-  const W=560,H=110,P=22,iW=W-P*2,iH=H-P*2;
-  const x = function(i){ return P+(i/(pts.length-1))*iW; };
+  const W=560,H=110,P=22,L=46,iW=W-L-P,iH=H-P*2;
+  const x = function(i){ return L+(i/(pts.length-1))*iW; };
   const y = function(v){ return P+iH-((v-mn)/rng)*iH; };
   const path = pts.map(function(v,i){ return (i===0?"M":"L")+x(i).toFixed(1)+","+y(v).toFixed(1); }).join(" ");
-  const fill = path+" L"+x(pts.length-1).toFixed(1)+","+(P+iH).toFixed(1)+" L"+P+","+(P+iH).toFixed(1)+" Z";
+  const fill = path+" L"+x(pts.length-1).toFixed(1)+","+(P+iH).toFixed(1)+" L"+L+","+(P+iH).toFixed(1)+" Z";
   const last=pts[pts.length-1], lc=last>=0?C.green:C.red, showZ=mn<0&&mx>0;
   let pk2=0,maxDD2=0;
   pts.forEach(function(v){if(v>pk2)pk2=v;const dd=pk2-v;if(dd>maxDD2)maxDD2=dd;});
   return (
     <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"16px 20px",marginBottom:14}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:12}}>
         <span style={{fontSize:12,color:C.text,letterSpacing:"0.11em",textTransform:"uppercase",fontWeight:700}}>Equity Curve</span>
         <div style={{display:"flex",gap:24}}>
           <div style={{textAlign:"right"}}>
@@ -1845,14 +1944,14 @@ function EquityCurve({trades, rv, showOnlyR}) {
         </div>
       </div>
       <svg viewBox={"0 0 "+W+" "+H} width="100%" style={{display:"block"}}>
-        <line x1={P} y1={P+iH*0.33} x2={W-P} y2={P+iH*0.33} stroke="#14141A" strokeWidth="1"/>
-        <line x1={P} y1={P+iH*0.67} x2={W-P} y2={P+iH*0.67} stroke="#14141A" strokeWidth="1"/>
-        {showZ && <line x1={P} y1={y(0)} x2={W-P} y2={y(0)} stroke="#2A2A34" strokeWidth="0.75" strokeDasharray="4,3"/>}
+        <line x1={L} y1={P+iH*0.33} x2={W-P} y2={P+iH*0.33} stroke="#14141A" strokeWidth="1"/>
+        <line x1={L} y1={P+iH*0.67} x2={W-P} y2={P+iH*0.67} stroke="#14141A" strokeWidth="1"/>
+        {showZ && <line x1={L} y1={y(0)} x2={W-P} y2={y(0)} stroke="#2A2A34" strokeWidth="0.75" strokeDasharray="4,3"/>}
         <path d={fill} fill={lc+"18"}/>
         <path d={path} fill="none" stroke={lc} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round"/>
         {pts.map(function(v,i){ return <circle key={i} cx={x(i)} cy={y(v)} r="2" fill={i===0?"#444":v>=(pts[Math.max(0,i-1)]||0)?C.green:C.red}/>; })}
-        <text x={P-4} y={P+4}    fill={C.sub} fontSize="8" textAnchor="end">{mx.toFixed(1)+"R"}</text>
-        <text x={P-4} y={P+iH+4} fill={C.sub} fontSize="8" textAnchor="end">{mn.toFixed(1)+"R"}</text>
+        <text x={L-4} y={P+4}    fill={C.sub} fontSize="8" textAnchor="end">{mx.toFixed(1)+"R"}</text>
+        <text x={L-4} y={P+iH+4} fill={C.sub} fontSize="8" textAnchor="end">{mn.toFixed(1)+"R"}</text>
       </svg>
     </div>
   );
@@ -1861,7 +1960,7 @@ function EquityCurve({trades, rv, showOnlyR}) {
 // METRIC CARD
 function MetricCard({label, value, sub, color}) {
   return (
-    <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:8,padding:"14px 16px"}}>
+    <div className="metric-card" style={{background:C.card,border:"1px solid "+C.border,borderRadius:8,padding:"14px 16px"}}>
       <div style={{fontSize:9,color:C.sub,letterSpacing:"0.13em",textTransform:"uppercase",marginBottom:7}}>{label}</div>
       <div style={{fontSize:18,fontWeight:700,color:color||C.text,lineHeight:1}}>{value}</div>
       {sub && <div style={{fontSize:11,color:color||C.sub,opacity:0.65,marginTop:5}}>{sub}</div>}
@@ -1963,7 +2062,8 @@ function productFamily(trade) {
 }
 function fmtPfValue(m) {
   if (!m) return "-";
-  if (!isFinite(m.pf) || isNaN(m.pf)) return "99.00";
+  if (m.pf === Infinity) return "\u221E";
+  if (!isFinite(m.pf) || isNaN(m.pf)) return "-";
   return m.pf.toFixed(2);
 }
 function WeekMetric({label, value, color}) {
@@ -2035,7 +2135,7 @@ function WeekStatsPanel({week, trades, rv}) {
 function WeekCell({weekTrades, rv, showOnlyR, selected, onClick}) {
   weekTrades = weekTrades || [];
   const closed   = weekTrades.filter(function(t){ return getTradeResult(t) !== "Open"; });
-  const totalPnl = closed.reduce(function(s,t){ return s+(t.pnl_dollars||0); }, 0);
+  const totalPnl = closed.reduce(function(s,t){ return s+Number(t.pnl_dollars||0); }, 0);
   const r   = calcR(totalPnl, rv);
   const wins = closed.filter(function(t){ return getTradeResult(t) === "Win"; }).length;
   const losses = closed.filter(function(t){ return getTradeResult(t) === "Loss"; }).length;
@@ -2084,7 +2184,7 @@ function CalendarioView({trades, rv, onImport, onExport, onTWImport, ohlcMeta, s
   function dayStats(ds) {
     const dt = byDate[ds]; if (!dt || !dt.length) return null;
     const closed = dt.filter(function(t){ return getTradeResult(t) !== "Open"; }); if (!closed.length) return null;
-    const totalPnl = closed.reduce(function(s,t){ return s+(t.pnl_dollars||0); }, 0);
+    const totalPnl = closed.reduce(function(s,t){ return s+Number(t.pnl_dollars||0); }, 0);
     const wins = closed.filter(function(t){ return getTradeResult(t) === "Win"; }).length;
     const losses = closed.filter(function(t){ return getTradeResult(t) === "Loss"; }).length;
     return { n: closed.length, totalPnl: totalPnl, wr: calcWinRatePercent(wins, losses) };
@@ -2200,32 +2300,32 @@ function Dashboard({trades, rv, ohlcData, ohlcNQ, showOnlyR, onToggleR, onOpenIn
           {showOnlyR?"R":"R / $"}
         </button>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:10}}>
+      <div className="dashboard-metrics" style={{gap:10,marginBottom:10}}>
         <MetricCard label="Expectancy"    value={(m.ev>=0?"+":"")+m.ev.toFixed(2)+"R"}  sub={showOnlyR?null:fmtD(m.ev*rv)}   color={evC}/>
         <MetricCard label="Win Rate"      value={m.wr.toFixed(1)+"%"}                                          color={m.wr>=50?C.green:C.red}/>
         <MetricCard label="Profit Factor" value={isFinite(m.pf)?m.pf.toFixed(2):"\u221E"}                    color={m.pf>=1?C.green:C.red}/>
         <MetricCard label="Total R"       value={fmtR(m.totalR)}                         sub={showOnlyR?null:fmtD(m.totalD)}  color={totC}/>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:10}}>
+      <div className="dashboard-metrics" style={{gap:10,marginBottom:10}}>
         <MetricCard label="Avg Win"           value={"+"+m.avgW.toFixed(2)+"R"} sub={showOnlyR?null:fmtD(m.avgW*rv)} color={C.green}/>
         <MetricCard label="Avg Loss"          value={m.avgL.toFixed(2)+"R"}     sub={showOnlyR?null:fmtD(m.avgL*rv)} color={C.red}/>
         <MetricCard label="Avg Duration Win"  value={fmtDur(m.avgDurW)}                               color={C.green}/>
         <MetricCard label="Avg Duration Loss" value={fmtDur(m.avgDurL)}                               color={C.red}/>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:14}}>
+      <div className="dashboard-metrics" style={{gap:10,marginBottom:14}}>
         <MetricCard label="Recovery Factor" value={isFinite(m.rf)?m.rf.toFixed(2):"\u221E"} sub="total R / max DD" color={rfC}/>
         <MetricCard label="Max Streak Win"  value={String(m.maxConsecW)} sub="consecutivi" color={C.green}/>
         <MetricCard label="Max Streak Loss" value={String(m.maxConsecL)} sub="consecutivi" color={C.red}/>
         <MetricCard label="W / L / BE"      value={m.w+" / "+m.l+" / "+m.be} color={C.sub}/>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:14}}>
+      <div className="dashboard-metrics" style={{gap:10,marginBottom:14}}>
         <MetricCard label="Best Trade" value={fmtR(extremes.bestTrade.r)} sub={tradeExtremeSub(extremes.bestTrade)} color={extremes.bestTrade.dollars>=0?C.green:C.red}/>
         <MetricCard label="Worst Trade" value={fmtR(extremes.worstTrade.r)} sub={tradeExtremeSub(extremes.worstTrade)} color={extremes.worstTrade.dollars<=0?C.red:C.green}/>
         <MetricCard label="Best Trading Day" value={fmtR(extremes.bestDay.r)} sub={dayExtremeSub(extremes.bestDay)} color={extremes.bestDay.dollars>=0?C.green:C.red}/>
         <MetricCard label="Worst Trading Day" value={fmtR(extremes.worstDay.r)} sub={dayExtremeSub(extremes.worstDay)} color={extremes.worstDay.dollars<=0?C.red:C.green}/>
       </div>
       <EquityCurve trades={trades} rv={rv} showOnlyR={showOnlyR}/>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+      <div className="dashboard-pair" style={{gap:14,marginBottom:14}}>
         <DonutChart w={m.w} l={m.l} be={m.be}/>
         <AssetWinRateDonuts trades={trades}/>
       </div>
@@ -2237,7 +2337,7 @@ function Dashboard({trades, rv, ohlcData, ohlcNQ, showOnlyR, onToggleR, onOpenIn
           const pct = Math.min(Math.max(fm.ev*20+50,2),98);
           return (
             <div key={item.key} style={{marginBottom:10}}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:4,flexWrap:"wrap",gap:4}}>
                 <span style={{fontSize:11,color:item.col,fontWeight:500}}>{item.key}</span>
                 <span style={{fontSize:11,color:fm.ev>=0?C.green:C.red}}>{"EV "+(fm.ev>=0?"+":"")+fm.ev.toFixed(2)+"R - WR "+fm.wr.toFixed(0)+"% - "+fm.n+"t"}</span>
               </div>
@@ -2254,7 +2354,7 @@ function Dashboard({trades, rv, ohlcData, ohlcNQ, showOnlyR, onToggleR, onOpenIn
         {label:"NQ / MNQ",m:byAsset["NQ"]||null,col:C.blue},
         {label:"ES / MES",m:byAsset["ES"]||null,col:C.gold},
       ]}/>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+      <div className="dashboard-pair" style={{gap:12}}>
         <BTable title="Performance per session" rows={[
           {label:"Pre Market",m:bySess["Pre Market"]||null,col:C.sub},
           {label:"AM",        m:bySess["AM"]        ||null,col:C.gold},
@@ -2276,29 +2376,13 @@ function Dashboard({trades, rv, ohlcData, ohlcNQ, showOnlyR, onToggleR, onOpenIn
 
 // SETTIMANALE
 function SettimanaleView() {
-  function getW(){const d=new Date(),y=d.getFullYear(),wn=Math.ceil(((d-new Date(y,0,1))/86400000+new Date(y,0,1).getDay()+1)/7);return y+"-W"+String(wn).padStart(2,"0");}
-  const [week,  setWeek]  = useState(getW());
-  const [data,  setData]  = useState({});
-  const [flash, setFlash] = useState("");
-
-  useEffect(function(){
-    (async function(){
-      try{ const r=await storage.get("jnl:v2:week:"+week); setData(r?JSON.parse(r.value):{}); }
-      catch(e){ setData({}); }
-    })();
-  },[week]);
-
-  async function save(){
-    try{ await storage.set("jnl:v2:week:"+week,JSON.stringify(data)); setFlash("Salvato OK"); setTimeout(function(){setFlash("");},2000); }
-    catch(e){}
-  }
+  const [week, setWeek] = useState(getCurrentWeekId());
+  const document = useWeeklyDocument("jnl:v2:week:" + week, {});
+  const {data, flash, save} = document;
 
   function setVal(key, day, val) {
-    setData(function(prev){
-      const next={}; Object.keys(prev).forEach(function(k){next[k]=prev[k];});
-      const k=key+"_"+day; next[k]=prev[k]===val?"":val;
-      return next;
-    });
+    const k = key + "_" + day;
+    document.update({...data, [k]:data[k] === val ? "" : val});
   }
 
   const FIELDS = [
@@ -2324,12 +2408,14 @@ function SettimanaleView() {
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20,paddingBottom:14,borderBottom:"1px solid "+C.gold+"30"}}>
         <div style={{display:"flex",alignItems:"center",gap:14}}>
           <span style={{fontSize:10,color:C.gold,letterSpacing:"0.12em",textTransform:"uppercase",fontWeight:700}}>Settimana</span>
-          <input type="week" value={week} onChange={function(e){setWeek(e.target.value);}} style={{background:C.muted,border:"1px solid "+C.gold+"50",borderRadius:4,color:C.gold,fontSize:12,padding:"6px 10px",fontFamily:"inherit",outline:"none"}}/>
+          <input type="week" value={week} onChange={function(e){if(e.target.value)setWeek(e.target.value);}} style={{background:C.muted,border:"1px solid "+C.gold+"50",borderRadius:4,color:C.gold,fontSize:12,padding:"6px 10px",fontFamily:"inherit",outline:"none"}}/>
         </div>
-        <button onClick={save} style={{padding:"8px 20px",background:"transparent",border:"1px solid "+C.gold,borderRadius:4,color:C.gold,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.12em",textTransform:"uppercase",fontWeight:700}}>
+        <button disabled={!document.ready} onClick={function(){save();}} style={{padding:"8px 20px",background:"transparent",border:"1px solid "+C.gold,borderRadius:4,color:C.gold,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.12em",textTransform:"uppercase",fontWeight:700}}>
           {flash||"SALVA"}
         </button>
       </div>
+      {document.error && <div role="alert" style={{color:C.red,marginBottom:12,lineHeight:1.5}}>{document.error}</div>}
+      <fieldset disabled={!document.ready} style={{border:0,minWidth:0}}>
       <div style={{overflowX:"auto"}}>
         <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed"}}>
           <thead>
@@ -2354,15 +2440,15 @@ function SettimanaleView() {
                       <td key={d} style={{padding:"6px 4px",textAlign:"center",verticalAlign:"middle",borderLeft:"0.5px solid "+C.gold+"15"}}>
                         {field.text?(
                           <input type="text" value={val}
-                            onChange={function(e){const k=field.key+"_"+d;setData(function(prev){const next={};Object.keys(prev).forEach(function(k){next[k]=prev[k];});next[k]=e.target.value;return next;});}}
-                            onBlur={save} style={cinp} placeholder="-"/>
+                            onChange={function(e){document.update({...data, [field.key+"_"+d]:e.target.value});}}
+                            style={cinp} placeholder="-"/>
                         ):(
                           <div style={{display:"flex",flexWrap:"wrap",justifyContent:"center",gap:2}}>
                             {field.opts.map(function(opt){
                               const sel=val===opt;
                               const oc=opt==="Si"?C.green:opt==="No"?C.red:opt==="Parz"?C.gold:C.blue;
                               return(
-                                <button key={opt} onClick={function(){setVal(field.key,d,opt);setTimeout(save,150);}}
+                                <button key={opt} onClick={function(){setVal(field.key,d,opt);}}
                                   style={{padding:"3px 6px",background:sel?oc+"30":C.muted,border:"1px solid "+(sel?oc:C.border),borderRadius:3,color:sel?oc:C.sub,fontSize:9,cursor:"pointer",fontFamily:"inherit",fontWeight:sel?700:400,lineHeight:1.4,transition:"all 0.1s"}}>
                                   {opt}
                                 </button>
@@ -2382,11 +2468,11 @@ function SettimanaleView() {
       <div style={{marginTop:20,borderTop:"0.5px solid "+C.gold+"30",paddingTop:16}}>
         <div style={{fontSize:10,color:C.gold,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8,fontWeight:700}}>Note libere</div>
         <textarea value={data["note_libere"]||""}
-          onChange={function(e){setData(function(prev){const next={};Object.keys(prev).forEach(function(k){next[k]=prev[k];});next["note_libere"]=e.target.value;return next;});}}
-          onBlur={save}
+          onChange={function(e){document.update({...data, note_libere:e.target.value});}}
           rows={4} placeholder="Osservazioni, pattern, errori da correggere..."
           style={{width:"100%",background:C.muted,border:"1px solid "+C.gold+"40",borderRadius:4,color:C.text,fontSize:12,padding:"10px 12px",fontFamily:"inherit",outline:"none",resize:"vertical",boxSizing:"border-box",lineHeight:1.6}}/>
       </div>
+      </fieldset>
     </div>
   );
 }
@@ -2394,48 +2480,19 @@ function SettimanaleView() {
 // WEEKLY REVIEW & PLAYBOOK
 function WeeklyPlaybookView() {
   const [week, setWeek] = useState(getCurrentWeekId());
-  const [data, setData] = useState({ tags: [] });
-  const [flash, setFlash] = useState("");
-
-  useEffect(function(){
-    (async function(){
-      try {
-        const r = await storage.get("jnl:v2:playbook:" + week);
-        setData(r ? JSON.parse(r.value) : { tags: [] });
-      } catch(e) { setData({ tags: [] }); }
-    })();
-  }, [week]);
-
-  async function save(nextData) {
-    const payload = nextData || data;
-    try {
-      await storage.set("jnl:v2:playbook:" + week, JSON.stringify(payload));
-      setFlash("Salvato OK");
-      setTimeout(function(){ setFlash(""); }, 1600);
-    } catch(e) {}
-  }
+  const document = useWeeklyDocument("jnl:v2:playbook:" + week, {tags:[]});
+  const {data, flash, save} = document;
 
   function setField(key, val) {
-    setData(function(prev){
-      const next = {};
-      Object.keys(prev || {}).forEach(function(k){ next[k] = prev[k]; });
-      next[key] = val;
-      return next;
-    });
+    document.update({...data, [key]:val});
   }
 
   function toggleTag(tag) {
-    setData(function(prev){
-      const next = {};
-      Object.keys(prev || {}).forEach(function(k){ next[k] = prev[k]; });
-      const tags = (next.tags || []).slice();
-      const idx = tags.indexOf(tag);
-      if (idx >= 0) tags.splice(idx, 1);
-      else if (tags.length < 3) tags.push(tag);
-      next.tags = tags;
-      setTimeout(function(){ save(next); }, 120);
-      return next;
-    });
+    const tags = (data.tags || []).slice();
+    const idx = tags.indexOf(tag);
+    if (idx >= 0) tags.splice(idx, 1);
+    else if (tags.length < 3) tags.push(tag);
+    document.update({...data, tags:tags});
   }
 
   const info = parseWeekId(week);
@@ -2453,7 +2510,6 @@ function WeeklyPlaybookView() {
         <div style={{fontSize:11,color:C.text,letterSpacing:"0.08em",textTransform:"uppercase",fontWeight:700,marginBottom:8}}>{label}</div>
         <textarea rows={rows || 5} value={data[key] || ""}
           onChange={function(e){ setField(key, e.target.value); }}
-          onBlur={function(){ save(); }}
           style={areaStyle}/>
       </div>
     );
@@ -2475,11 +2531,13 @@ function WeeklyPlaybookView() {
         <button onClick={function(){ setWeek(nextWeek); }} style={{background:"transparent",border:"1px solid "+C.border,borderRadius:4,color:C.sub,fontSize:12,padding:"7px 14px",cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.08em"}}>
           {"WEEK " + nextInfo.week + " >"}
         </button>
-        <button onClick={function(){ save(); }} style={{background:"transparent",border:"1px solid "+C.gold,borderRadius:4,color:C.gold,fontSize:11,padding:"8px 18px",cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.12em",textTransform:"uppercase",fontWeight:700}}>
+        <button disabled={!document.ready} onClick={function(){ save(); }} style={{background:"transparent",border:"1px solid "+C.gold,borderRadius:4,color:C.gold,fontSize:11,padding:"8px 18px",cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.12em",textTransform:"uppercase",fontWeight:700}}>
           {flash || "SAVE"}
         </button>
       </div>
 
+      {document.error && <div role="alert" style={{color:C.red,marginBottom:12,lineHeight:1.5}}>{document.error}</div>}
+      <fieldset disabled={!document.ready} style={{border:0,minWidth:0}}>
       <div style={{display:"flex",justifyContent:"center",gap:8,flexWrap:"wrap",marginBottom:22}}>
         {tagList.map(function(tag){
           const selected = tags.indexOf(tag) >= 0;
@@ -2511,9 +2569,9 @@ function WeeklyPlaybookView() {
         <div style={{fontSize:14,color:C.gold,letterSpacing:"0.12em",textTransform:"uppercase",fontWeight:700,marginBottom:10,textAlign:"center"}}>Biggest Lesson Of The Week</div>
         <textarea rows={3} value={data.lesson || ""}
           onChange={function(e){ setField("lesson", e.target.value); }}
-          onBlur={function(){ save(); }}
           style={shortAreaStyle}/>
       </div>
+      </fieldset>
     </div>
   );
 }
@@ -2544,25 +2602,30 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
   const [flash, setFlash] = useState("");
   const [filters, setFilters] = useState({compliance:"ALL",instrument:"ALL",deviation:"ALL",reason:"ALL",from:"",to:""});
   const [impactChartMode, setImpactChartMode] = useState("R");
+  const [loadError, setLoadError] = useState("");
+  const [saveError, setSaveError] = useState("");
 
   useEffect(function(){
     (async function(){
       try {
         const stored = await storage.get(EXECUTION_REVIEWS_KEY);
         const parsed = stored ? JSON.parse(stored.value) : [];
-        setReviews(Array.isArray(parsed) ? parsed : []);
-      } catch(e) { setReviews([]); }
+        if (!Array.isArray(parsed)) throw new Error("Formato non valido");
+        setReviews(parsed);
+      } catch(e) { setLoadError("Lettura delle review non riuscita. Nessun dato e stato sovrascritto."); }
       setLoaded(true);
     })();
   }, []);
 
   async function persistReviews(next, message) {
-    setReviews(next);
+    setSaveError(""); setFlash("");
     try {
       await storage.set(EXECUTION_REVIEWS_KEY, JSON.stringify(next));
+      setReviews(next);
       setFlash(message || "Saved");
       setTimeout(function(){ setFlash(""); }, 1800);
-    } catch(e) { setFlash("Save error"); }
+      return true;
+    } catch(e) { setSaveError(e.message); setFormError(e.message); return false; }
   }
   function updateForm(key, value) {
     setForm(function(prev){
@@ -2643,7 +2706,7 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
     const next = editingId
       ? reviews.map(function(review){ return review.id === editingId ? record : review; })
       : [record].concat(reviews);
-    await persistReviews(next, editingId ? "Review updated" : "Review added");
+    if (!await persistReviews(next, editingId ? "Review updated" : "Review added")) return;
     setFormOpen(false);
     setEditingId(null);
     if (openStopAfter && onOpenInitialStop) onOpenInitialStop(linkedTrade.id);
@@ -2713,6 +2776,7 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
     );
   }
 
+  if (loadError) return <div role="alert" style={{padding:20,color:C.red}}>{loadError}</div>;
   if (!loaded) return <div style={{padding:"50px 20px",textAlign:"center",color:C.sub}}>Loading Execution Reviews...</div>;
   return (
     <div>
@@ -2727,6 +2791,7 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
         </div>
       </div>
 
+      {saveError && <div role="alert" style={{fontSize:11,color:C.red,lineHeight:1.5,marginBottom:12}}>{saveError}</div>}
       <div style={{fontSize:10,color:C.green,letterSpacing:"0.1em",textTransform:"uppercase",fontWeight:700,margin:"2px 0 8px"}}>Decision Impact - All Measured Reviews</div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(145px,1fr))",gap:8,marginBottom:16}}>
         {summaryCards.map(function(card){
@@ -2934,14 +2999,14 @@ function TWImportModal({onClose, onSave, existing}) {
   const [saving,  setSaving]  = useState(false);
   function handleFile(e) {
     const file = e.target.files[0]; if (!file) return;
+    setParsed(null); setError("");
     const reader = new FileReader();
     reader.onload = function(ev) {
       try {
         const data = parseTWCsv(ev.target.result);
         if (!data.length){ setError("Nessuna candela valida."); return; }
-        const times = data.map(function(c){return c.time;});
-        const first = unixToETDate(Math.min.apply(null,times));
-        const last  = unixToETDate(Math.max.apply(null,times));
+        const first = unixToETDate(data[0].time);
+        const last  = unixToETDate(data[data.length - 1].time);
         const daySet = {};
         data.forEach(function(c){ daySet[unixToETDate(c.time)]=1; });
         const days = Object.keys(daySet).length;
@@ -2950,12 +3015,16 @@ function TWImportModal({onClose, onSave, existing}) {
         setParsed({data:data,first:first,last:last,n:data.length,days:days,timeframe_seconds:timeframe,gaps:gaps}); setError("");
       } catch(err){ setError("Errore: "+err.message); }
     };
+    reader.onerror = function(){ setError("Lettura del file non riuscita."); };
     reader.readAsText(file);
   }
   async function handleSave(){
     if (!parsed) return; setSaving(true);
-    await onSave(parsed.data,{first:parsed.first,last:parsed.last,n:parsed.n,days:parsed.days});
-    setSaving(false); onClose();
+    try {
+      await onSave(parsed.data,{first:parsed.first,last:parsed.last,n:parsed.n,days:parsed.days});
+      onClose();
+    } catch(e) { setError(e.message); }
+    finally { setSaving(false); }
   }
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
@@ -3013,25 +3082,33 @@ function ImportModal({onClose, trades, setTrades, ohlcData, ohlcNQ}) {
   const [saving,  setSaving]  = useState(false);
   function handleFile(e) {
     const file = e.target.files[0]; if (!file) return;
+    setParsed(null); setError("");
     const reader = new FileReader();
     reader.onload = function(ev) {
-      const res = parseTradovateCSV(ev.target.result);
-      if (res.errors.length && !res.trades.length){ setError(res.errors.join(" | ")); setParsed(null); return; }
-      setParsed(res); setError("");
+      try {
+        const res = parseTradovateCSV(ev.target.result);
+        if (res.errors.length && !res.trades.length){ setError(res.errors.join(" | ")); setParsed(null); return; }
+        setParsed(res); setError("");
+      } catch(err) { setError("Errore: " + err.message); }
     };
+    reader.onerror = function(){ setError("Lettura del file non riuscita."); };
     reader.readAsText(file);
   }
   async function handleImport(){
     if (!parsed || !parsed.trades.length) return;
     setSaving(true);
-    const existingIds = {};
-    trades.forEach(function(t){ existingIds[t.id]=1; });
-    const newTrades = [...trades];
-    parsed.trades.forEach(function(t){ if (!existingIds[t.id]) newTrades.push(t); });
-    const enriched = ((ohlcData && ohlcData.length) || (ohlcNQ && ohlcNQ.length)) ? enrichTradesWithMaeMfe(newTrades, ohlcData || [], ohlcNQ || []) : {trades:newTrades};
-    setTrades(enriched.trades);
-    try{ await storage.set("jnl:v2:trades",JSON.stringify(enriched.trades)); }catch(e){}
-    setSaving(false); onClose();
+    setError("");
+    try {
+      const existingIds = {};
+      trades.forEach(function(t){ existingIds[t.id]=1; });
+      const newTrades = [...trades];
+      parsed.trades.forEach(function(t){ if (!existingIds[t.id]) { newTrades.push(t); existingIds[t.id] = 1; } });
+      const enriched = ((ohlcData && ohlcData.length) || (ohlcNQ && ohlcNQ.length)) ? enrichTradesWithMaeMfe(newTrades, ohlcData || [], ohlcNQ || []) : {trades:newTrades};
+      await storage.set("jnl:v2:trades",JSON.stringify(enriched.trades));
+      setTrades(enriched.trades);
+      onClose();
+    } catch(e) { setError(e.message); }
+    finally { setSaving(false); }
   }
   const winsN   = parsed ? parsed.trades.filter(function(t){return getTradeResult(t)==="Win";}).length  : 0;
   const lossesN = parsed ? parsed.trades.filter(function(t){return getTradeResult(t)==="Loss";}).length : 0;
@@ -3096,7 +3173,7 @@ function ExportModal({trades, rv, onClose}) {
       if (h==="r")       return '"'+calcR(t.pnl_dollars||0,rv).toFixed(2)+'"';
       if (h==="result")  return '"'+getTradeResult(t)+'"';
       if (h==="partial") return '"'+( t.partial?"Si":"No")+'"';
-      return '"'+String(t[h]||"").replace(/"/g,'\'\'')+'"';
+      return '"'+String(t[h] == null ? "" : t[h]).replace(/"/g,'""')+'"';
     }).join(",");
   });
   const csv = [headers.join(","), ...rows].join("\n");
@@ -3120,6 +3197,13 @@ function ExportModal({trades, rv, onClose}) {
 // SETTINGS MODAL
 function SettingsModal({rv, onSave, onClose}) {
   const [val, setVal] = useState(String(rv));
+  const [saveError, setSaveError] = useState("");
+  async function saveR(){
+    setSaveError("");
+    if (!validRValue(val)) { setSaveError("Il valore di 1R deve essere un numero maggiore di zero."); return; }
+    try { await onSave(Number(val)); }
+    catch(e) { setSaveError(e.message); }
+  }
   const [backupStatus, setBackupStatus] = useState("");
   const [backupError, setBackupError] = useState("");
   const [restoreCandidate, setRestoreCandidate] = useState(null);
@@ -3185,13 +3269,13 @@ function SettingsModal({rv, onSave, onClose}) {
             <div style={{fontSize:10,color:C.sub,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:10}}>{"1R = $ - valore fisso in dollari"}</div>
             <input type="number" value={val} onChange={function(e){setVal(e.target.value);}} min="1" step="25" style={{width:"100%",background:C.card,border:"1px solid "+C.border,borderRadius:4,color:C.text,fontSize:22,fontWeight:700,padding:"12px 16px",fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}/>
             <div style={{fontSize:10,color:C.sub,marginTop:8}}>{"Default $250 - Aggiorna ad ogni nuovo conto prop"}</div>
-            <div style={{fontSize:10,color:C.sub,marginTop:4}}>{"Esempio: +$500 -> "+(500/(Number(val)||250)).toFixed(2)+"R"}</div>
+            <div style={{fontSize:10,color:C.sub,marginTop:4}}>{validRValue(val) ? "Esempio: +$500 -> "+(500/Number(val)).toFixed(2)+"R" : "Esempio: -"}</div>
           </div>
           <div style={{display:"flex",gap:10}}>
-            <button onClick={function(){onSave(Number(val)||R_DEFAULT);}} style={{padding:"10px 26px",background:"transparent",border:"1px solid "+C.gold,borderRadius:4,color:C.gold,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.12em",textTransform:"uppercase"}}>SALVA</button>
+            <button onClick={saveR} style={{padding:"10px 26px",background:"transparent",border:"1px solid "+C.gold,borderRadius:4,color:C.gold,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.12em",textTransform:"uppercase"}}>SALVA</button>
             <button onClick={onClose} style={{fontSize:11,color:C.sub,background:"transparent",border:"none",cursor:"pointer",fontFamily:"inherit"}}>Annulla</button>
           </div>
-
+          {saveError && <div role="alert" style={{color:C.red,fontSize:11,lineHeight:1.5,marginTop:12}}>{saveError}</div>}
           <div style={{borderTop:"1px solid "+C.border,marginTop:24,paddingTop:20}}>
             <div style={{fontSize:11,color:C.text,fontWeight:700,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Data & Backup</div>
             <div style={{fontSize:10,color:C.sub,lineHeight:1.6,marginBottom:14}}>Journal data is stored locally in this browser. Export a backup to protect or move your data.</div>
@@ -3249,6 +3333,8 @@ function Journal() {
   const [showSettings, setShowSettings] = useState(false);
   const [showTWImport, setShowTWImport] = useState(false);
   const [initialStopDate, setInitialStopDate] = useState(null);
+  const [loadError, setLoadError] = useState("");
+  const [loadWarning, setLoadWarning] = useState("");
   const [time,         setTime]         = useState("");
   function getTime(){
     const d=new Date();
@@ -3266,27 +3352,40 @@ function Journal() {
         const st=await storage.get("jnl:v2:settings");
         const oh=await storage.get("jnl:v2:ohlc");
         const om=await storage.get("jnl:v2:ohlcmeta");
-        if(tr) {
-          const loadedTrades = JSON.parse(tr.value);
-          const cleanedTrades = clearMaeMfeBeforeStart(loadedTrades);
-          setTrades(cleanedTrades.trades);
-          if (cleanedTrades.changed) await storage.set("jnl:v2:trades",JSON.stringify(cleanedTrades.trades));
-        }
-        // else: journal vuoto, pronto per trade reali
-        if(st){ const s=JSON.parse(st.value); if(s.rv) setRv(s.rv); }
-        if(oh){ const arr=JSON.parse(oh.value); setOhlcData(arr.map(function(c){return{time:c[0],high:c[1],low:c[2]};})); }
-        if(om) setOhlcMeta(JSON.parse(om.value));
         const onq=await storage.get("jnl:v2:ohlcNQ");
         const omq=await storage.get("jnl:v2:ohlcMetaNQ");
-        if(onq){ const arr=JSON.parse(onq.value); setOhlcNQ(arr.map(function(c){return{time:c[0],high:c[1],low:c[2]};})); }
-        if(omq) setOhlcMetaNQ(JSON.parse(omq.value));
-      }catch(e){}
+        const loadedTrades = tr ? JSON.parse(tr.value) : [];
+        if (!Array.isArray(loadedTrades) || loadedTrades.some(function(t){ return !t || typeof t !== "object" || Array.isArray(t); })) throw new Error("Formato trade non valido");
+        const settings = st ? JSON.parse(st.value) : {};
+        const es = oh ? JSON.parse(oh.value) : [];
+        const nq = onq ? JSON.parse(onq.value) : [];
+        const esMeta = om ? JSON.parse(om.value) : null;
+        const nqMeta = omq ? JSON.parse(omq.value) : null;
+        if (!Array.isArray(es) || !Array.isArray(nq)) throw new Error("Formato OHLC non valido");
+        const cleanedTrades = clearMaeMfeBeforeStart(loadedTrades);
+        setOhlcData(es.map(function(c){return{time:c[0],high:c[1],low:c[2]};}));
+        setOhlcNQ(nq.map(function(c){return{time:c[0],high:c[1],low:c[2]};}));
+        setOhlcMeta(esMeta); setOhlcMetaNQ(nqMeta);
+        setTrades(cleanedTrades.trades);
+        if (settings && settings.rv != null) {
+          if (validRValue(settings.rv)) setRv(Number(settings.rv));
+          else setLoadWarning("Valore R salvato non valido: uso temporaneo di $" + R_DEFAULT + ". Correggilo nelle Impostazioni.");
+        }
+        if (cleanedTrades.changed) {
+          try { await storage.set("jnl:v2:trades",JSON.stringify(cleanedTrades.trades)); }
+          catch(e) { setLoadWarning(e.message); }
+        }
+      }catch(e){ setLoadError("Lettura del journal non riuscita. Nessun dato e stato sovrascritto. Ricarica la pagina o usa Data & Backup nelle Impostazioni."); }
       setLoading(false);
     })();
   },[]);
   async function saveSettings(newR){
+    if (!validRValue(newR)) throw new Error("Il valore di 1R deve essere maggiore di zero.");
+    const stored = await storage.get("jnl:v2:settings");
+    const settings = stored ? JSON.parse(stored.value) : {};
+    await storage.set("jnl:v2:settings",JSON.stringify({...settings,rv:newR}));
     setRv(newR);
-    try{ await storage.set("jnl:v2:settings",JSON.stringify({rv:newR})); }catch(e){}
+    setLoadWarning("");
     setShowSettings(false);
   }
   async function saveTWOhlc(data, meta){
@@ -3297,46 +3396,33 @@ function Journal() {
     const compact = data.map(function(c){return[c.time,c.high,c.low];});
     const nextES = product === "NQ" ? ohlcData : data;
     const nextNQ = product === "NQ" ? data : ohlcNQ;
+    const enriched = enrichTradesWithMaeMfe(trades, nextES, nextNQ);
+    const entries = {};
+    entries[product === "NQ" ? "jnl:v2:ohlcNQ" : "jnl:v2:ohlc"] = JSON.stringify(compact);
+    entries[product === "NQ" ? "jnl:v2:ohlcMetaNQ" : "jnl:v2:ohlcmeta"] = JSON.stringify(meta);
+    if (enriched.changed) entries["jnl:v2:trades"] = JSON.stringify(enriched.trades);
+    writeJournalEntries(localStorage, entries);
     if (product === "NQ") {
       setOhlcNQ(data); setOhlcMetaNQ(meta);
-      try{ await storage.set("jnl:v2:ohlcNQ",JSON.stringify(compact)); await storage.set("jnl:v2:ohlcMetaNQ",JSON.stringify(meta)); }catch(e){}
     } else {
       setOhlcData(data); setOhlcMeta(meta);
-      try{ await storage.set("jnl:v2:ohlc",JSON.stringify(compact)); await storage.set("jnl:v2:ohlcmeta",JSON.stringify(meta)); }catch(e){}
     }
-    const enriched = enrichTradesWithMaeMfe(trades, nextES, nextNQ);
-    if (enriched.changed) {
-      setTrades(enriched.trades);
-      try{ await storage.set("jnl:v2:trades",JSON.stringify(enriched.trades)); }catch(e){}
-    }
+    if (enriched.changed) setTrades(enriched.trades);
   }
   async function updateInitialStop(tradeId, value){
-    if (!tradeId) return;
-    const raw = String(value || "").trim();
-    const stop = parseOptionalPrice(raw);
-    if (raw !== "" && stop == null) return;
+    if (!tradeId) throw new Error("Trade non trovato.");
     let changed = false;
     const nextTrades = trades.map(function(t){
       if (t.id !== tradeId) return t;
-      const next = {};
-      Object.keys(t).forEach(function(k){ next[k] = t[k]; });
-      if (raw === "") {
-        delete next.initial_stop_price;
-        delete next.initial_stop_source;
-        delete next.manual_initial_stop;
-        delete next.initial_stop_manual;
-      } else {
-        next.initial_stop_price = stop;
-        next.initial_stop_source = "manual";
-      }
+      const next = withManualInitialStop(t, value);
       const fresh = calcMaeMfe(next, ohlcData, ohlcNQ);
       next.mae_mfe = fresh.available ? fresh : (t.mae_mfe && t.mae_mfe.available ? updateMaeMfeRiskFromTrade(next, t.mae_mfe) : fresh);
       changed = true;
       return next;
     });
-    if (!changed) return;
+    if (!changed) throw new Error("Trade non trovato.");
+    await storage.set("jnl:v2:trades",JSON.stringify(nextTrades));
     setTrades(nextTrades);
-    try{ await storage.set("jnl:v2:trades",JSON.stringify(nextTrades)); }catch(e){}
   }
   function openInitialStops(){
     setInitialStopDate(initialStopEditorDate(trades));
@@ -3355,9 +3441,17 @@ function Journal() {
       Caricamento...
     </div>
   );
+  if (loadError) return (
+    <div style={{padding:24,color:C.red,fontFamily:"monospace",lineHeight:1.6}}>
+      <div role="alert">{loadError}</div>
+      <button onClick={function(){setShowSettings(true);}} style={{marginTop:16,padding:10}}>IMPOSTAZIONI</button>
+      {showSettings && <SettingsModal rv={rv} onSave={saveSettings} onClose={function(){setShowSettings(false);}}/>}
+    </div>
+  );
   return (
     <div style={{fontFamily:"'IBM Plex Mono','Courier New',monospace",fontSize:13,background:C.bg,minHeight:"100vh",color:C.text,padding:"20px 22px",boxSizing:"border-box"}}>
       <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Barlow+Condensed:wght@400;600;700&display=swap" rel="stylesheet"/>
+      {loadWarning && <div role="alert" style={{color:C.gold,marginBottom:16,lineHeight:1.5}}>{loadWarning}</div>}
       {showImport    && <ImportModal   onClose={function(){setShowImport(false);}}   trades={trades} setTrades={setTrades} ohlcData={ohlcData} ohlcNQ={ohlcNQ}/>}
       {showExport    && <ExportModal   trades={trades} rv={rv}                        onClose={function(){setShowExport(false);}}/>}
       {showSettings  && <SettingsModal rv={rv}         onSave={saveSettings}          onClose={function(){setShowSettings(false);}}/>}

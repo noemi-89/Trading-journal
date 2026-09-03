@@ -18,6 +18,41 @@
     .dashboard-metrics { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); }
     .dashboard-pair { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
     .metric-card { min-width: 0; overflow-wrap: anywhere; }
+    .journal-identity { min-width: 0; }
+    .journal-name-row { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+    .journal-trade-count { color: #8A96B0; font-size: 12px; letter-spacing: 0; }
+    .journal-motto { margin-top: 10px; color: #8A96B0; font-family: 'Barlow Condensed',sans-serif; font-size: 16px; font-weight: 500; line-height: 1.3; letter-spacing: 0; }
+    .mindset-title { font-family: 'Barlow Condensed',sans-serif; font-size: 24px; font-weight: 600; line-height: 1.2; letter-spacing: 0; margin-bottom: 18px; }
+    .mindset-layout { display: grid; grid-template-columns: minmax(180px,28fr) minmax(0,72fr); gap: 40px; align-items: center; }
+    .mindset-date-picker { position: relative; min-width: 0; }
+    .mindset-date-picker::before { content: ''; position: absolute; top: calc(50% - 24px); left: 0; right: 0; height: 48px; border-top: 1px solid #F5A02055; border-bottom: 1px solid #F5A02055; pointer-events: none; }
+    .mindset-wheel { --wheel-padding: 96px; height: 240px; overflow-y: auto; overscroll-behavior-y: contain; scroll-snap-type: y mandatory; scrollbar-width: thin; scrollbar-color: #383848 #0F0F13; color-scheme: dark; border: 0; outline-offset: 5px; }
+    .mindset-wheel-track { padding: var(--wheel-padding) 0; }
+    .mindset-date { display: flex; justify-content: center; align-items: center; gap: 9px; width: 100%; height: 48px; scroll-snap-align: center; border: 0; background: transparent; color: #8A96B0; font: 16px 'IBM Plex Mono',monospace; letter-spacing: 0; cursor: pointer; }
+    .mindset-date[aria-selected="true"] { color: #F5A020; font-size: 20px; font-weight: 500; }
+    .mindset-date-year { font-size: 12px; }
+    .mindset-date:hover { color: #EDE8DC; }
+    .mindset-quotes { min-width: 0; }
+    .mindset-statement { position: relative; display: block; padding: 13px 18px; border-left: 3px solid transparent; cursor: pointer; transition: color 100ms, border-color 100ms; }
+    .mindset-statement + .mindset-statement { margin-top: 4px; }
+    .mindset-statement:hover { background: #FFFFFF04; }
+    .mindset-statement.is-selected { border-left-color: #F5A020; background: #F5A02008; }
+    .mindset-statement input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+    .mindset-statement:focus-within { outline: 1px solid #8A96B0; outline-offset: 2px; }
+    .mindset-quote-text { display: block; font: 600 30px/1.12 'Barlow Condensed',sans-serif; letter-spacing: 0; overflow-wrap: anywhere; }
+    .mindset-statement.is-selected .mindset-quote-text { color: #F5A020; }
+    .mindset-author { display: block; color: #8A96B0; font-size: 11px; line-height: 1.4; margin-top: 6px; letter-spacing: 0; }
+    .mindset-feedback { color: #E84545; font-size: 12px; line-height: 1.5; margin-bottom: 14px; }
+    @media (max-width: 760px) {
+      .mindset-layout { grid-template-columns: minmax(0,1fr); gap: 24px; }
+      .mindset-date-picker { width: 100%; max-width: 320px; justify-self: center; }
+      .mindset-wheel { --wheel-padding: 48px; height: 144px; }
+      .mindset-quote-text { font-size: 25px; }
+      .mindset-statement { padding: 12px 14px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .mindset-statement { transition: none; }
+    }
     @media (max-width: 600px) {
       .dashboard-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
       .dashboard-pair { grid-template-columns: minmax(0,1fr); }
@@ -2560,7 +2595,7 @@ function WeeklyPlaybookView() {
         </div>
         <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:8,padding:"18px"}}>
           <div style={{fontSize:13,color:C.gold,letterSpacing:"0.12em",textTransform:"uppercase",fontWeight:700,marginBottom:16}}>Adjustments For Next Week</div>
-          {FieldBlock("What will I change?", "change")}
+          {FieldBlock("What will I improve?", "change")}
           {FieldBlock("What must I pay attention to?", "attention")}
         </div>
       </div>
@@ -2573,6 +2608,179 @@ function WeeklyPlaybookView() {
       </div>
       </fieldset>
     </div>
+  );
+}
+
+// CHAMPION MINDSET
+const CHAMPION_MINDSET_KEY = "jnl:v2:champion_mindset";
+const CHAMPION_QUOTES = [
+  {id:"tenacity", text:"VICTORY BELONGS TO THE MOST TENACIOUS.", author:"Roland-Garros"},
+  {id:"pressure", text:"PRESSURE IS A PRIVILEGE.", author:"Billie Jean King"},
+  {id:"recovery", text:"CHAMPIONS ARE DEFINED BY HOW THEY RECOVER.", author:"Serena Williams"},
+  {id:"rest", text:"REST AT THE END, NOT IN THE MIDDLE.", author:"Kobe Bryant"},
+  {id:"finish", text:"FIRST, YOU HAVE TO FINISH.", author:"Michael Schumacher"},
+];
+function mindsetToday(now) {
+  const d = now || new Date();
+  return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+}
+function mindsetDayNumber(date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const time = Date.parse(date + "T00:00:00Z");
+  if (!Number.isFinite(time) || new Date(time).toISOString().slice(0,10) !== date) return null;
+  return time / 86400000;
+}
+function mindsetDateFromDay(day) {
+  return new Date(day * 86400000).toISOString().slice(0,10);
+}
+function mindsetShiftMonth(date, delta) {
+  const d = new Date(date + "T00:00:00Z");
+  const day = d.getUTCDate();
+  d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + delta);
+  const end = new Date(d); end.setUTCMonth(end.getUTCMonth()+1); end.setUTCDate(0);
+  d.setUTCDate(Math.min(day,end.getUTCDate()));
+  return d.toISOString().slice(0,10);
+}
+function mindsetDateLabel(date) {
+  const months = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+  return date.slice(8,10) + " " + months[Number(date.slice(5,7))-1];
+}
+function parseMindsetEntries(raw) {
+  const entries = raw == null ? {} : JSON.parse(raw);
+  if (!entries || typeof entries !== "object" || Array.isArray(entries)) throw new Error("Archivio Champion Mindset non valido.");
+  Object.keys(entries).forEach(function(date){
+    if (mindsetDayNumber(date) == null || !CHAMPION_QUOTES.some(function(q){return q.id === entries[date];})) {
+      throw new Error("Archivio Champion Mindset non valido. Nessuna associazione e stata modificata.");
+    }
+  });
+  return entries;
+}
+async function saveMindsetQuote(date, quoteId) {
+  if (mindsetDayNumber(date) == null || !CHAMPION_QUOTES.some(function(q){return q.id === quoteId;})) throw new Error("Data o frase non valida.");
+  const stored = await storage.get(CHAMPION_MINDSET_KEY);
+  const entries = parseMindsetEntries(stored ? stored.value : null);
+  if (entries[date] === quoteId) return entries;
+  const next = {...entries, [date]:quoteId};
+  await storage.set(CHAMPION_MINDSET_KEY, JSON.stringify(next));
+  return next;
+}
+function MindsetDateWheel({value, onChange}) {
+  const [anchor, setAnchor] = useState(value);
+  const scroller = useRef(null);
+  const scrollTimer = useRef(null);
+  const scrollSelection = useRef(null);
+  const positionedAnchor = useRef(null);
+  const firstDay = mindsetDayNumber(anchor) - 365;
+  const rowHeight = 48;
+  useEffect(function(){
+    const element = scroller.current;
+    if (!element) return;
+    const index = mindsetDayNumber(value) - firstDay;
+    if (index < 30 || index > 700) { setAnchor(value); return; }
+    if (scrollSelection.current === value && positionedAnchor.current === anchor) return;
+    clearTimeout(scrollTimer.current);
+    positionedAnchor.current = anchor;
+    scrollSelection.current = value;
+    element.scrollTop = index * rowHeight;
+  }, [value, anchor]);
+  useEffect(function(){ return function(){clearTimeout(scrollTimer.current);}; }, []);
+  function choose(date) {
+    clearTimeout(scrollTimer.current);
+    scrollSelection.current = null;
+    const index = mindsetDayNumber(date) - firstDay;
+    if (index < 30 || index > 700) setAnchor(date);
+    else if (scroller.current) scroller.current.scrollTop = index * rowHeight;
+    onChange(date);
+  }
+  function handleScroll(event) {
+    const element = event.currentTarget;
+    clearTimeout(scrollTimer.current);
+    scrollTimer.current = setTimeout(function(){
+      const index = Math.max(0,Math.min(730,Math.round(element.scrollTop / rowHeight)));
+      const date = mindsetDateFromDay(firstDay + index);
+      scrollSelection.current = date;
+      // Recenter the rendered window at its edges, retaining access to older years.
+      if (index < 30 || index > 700) setAnchor(date);
+      else element.scrollTop = index * rowHeight;
+      if (date !== value) onChange(date);
+    }, 100);
+  }
+  function handleKey(event) {
+    let date = null;
+    if (event.key === "ArrowUp") date = mindsetDateFromDay(mindsetDayNumber(value)-1);
+    if (event.key === "ArrowDown") date = mindsetDateFromDay(mindsetDayNumber(value)+1);
+    if (event.key === "PageUp") date = mindsetShiftMonth(value,event.shiftKey?-12:-1);
+    if (event.key === "PageDown") date = mindsetShiftMonth(value,event.shiftKey?12:1);
+    if (event.key === "Home") date = mindsetToday();
+    if (date) { event.preventDefault(); choose(date); }
+  }
+  const dates = Array.from({length:731},function(_,i){return mindsetDateFromDay(firstDay+i);});
+  return (
+    <div className="mindset-date-picker">
+      <div className="mindset-wheel" ref={scroller} role="listbox" tabIndex={0} aria-label="Data Champion Mindset"
+        aria-activedescendant={"mindset-date-"+value} onScroll={handleScroll} onKeyDown={handleKey}>
+        <div className="mindset-wheel-track">
+          {dates.map(function(date){
+            const selected = date === value;
+            return <button key={date} id={"mindset-date-"+date} type="button" className="mindset-date" role="option"
+              aria-selected={selected} aria-label={mindsetDateLabel(date)+" "+date.slice(0,4)} tabIndex={-1}
+              onClick={function(){choose(date);}}>
+              <span>{mindsetDateLabel(date)}</span>
+              {selected && <span className="mindset-date-year">{date.slice(0,4)}</span>}
+            </button>;
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+function ChampionMindsetView() {
+  const [date, setDate] = useState(mindsetToday);
+  const [entries, setEntries] = useState({});
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const busy = useRef(false);
+  const active = useRef(true);
+  useEffect(function(){
+    active.current = true;
+    (async function(){
+      try {
+        const stored = await storage.get(CHAMPION_MINDSET_KEY);
+        const next = parseMindsetEntries(stored ? stored.value : null);
+        if (active.current) { setEntries(next); setLoaded(true); }
+      } catch(e) { if (active.current) setError("Lettura Champion Mindset non riuscita. Nessun dato e stato sovrascritto."); }
+    })();
+    return function(){active.current = false;};
+  }, []);
+  async function chooseQuote(quoteId) {
+    if (!loaded || busy.current) return;
+    busy.current = true; setSaving(true); setError("");
+    try {
+      const next = await saveMindsetQuote(date,quoteId);
+      if (active.current) setEntries(next);
+    } catch(e) { if (active.current) setError("Non salvato per " + mindsetDateLabel(date) + " " + date.slice(0,4) + ". " + e.message); }
+    finally { busy.current = false; if (active.current) setSaving(false); }
+  }
+  return (
+    <section aria-labelledby="champion-mindset-title">
+      <h1 id="champion-mindset-title" className="mindset-title">CHAMPION MINDSET</h1>
+      {error && <div role="alert" className="mindset-feedback">{error}</div>}
+      <div className="mindset-layout">
+        <MindsetDateWheel value={date} onChange={setDate}/>
+        <div className="mindset-quotes" role="radiogroup" aria-label={"Frase del "+date} aria-busy={!loaded || saving}>
+          {CHAMPION_QUOTES.map(function(quote){
+            const selected = entries[date] === quote.id;
+            return <label key={quote.id} className={"mindset-statement"+(selected?" is-selected":"")}>
+              <input type="radio" name="champion-quote" value={quote.id} checked={selected} disabled={!loaded || saving}
+                onChange={function(){chooseQuote(quote.id);}}/>
+              <span className="mindset-quote-text">{quote.text}</span>
+              <span className="mindset-author">{"\u2014 "+quote.author}</span>
+            </label>;
+          })}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -3435,7 +3643,7 @@ function Journal() {
     setTab("calendario");
   }
   function toggleR(){ setShowOnlyR(function(v){return !v;}); }
-  const TABS = [{k:"dashboard",l:"DASHBOARD"},{k:"calendario",l:"CALENDARIO"},{k:"settimanale",l:"SETTIMANALE"},{k:"playbook",l:"PLAYBOOK"},{k:"execution",l:"EXECUTION"}];
+  const TABS = [{k:"dashboard",l:"DASHBOARD"},{k:"calendario",l:"CALENDARIO"},{k:"settimanale",l:"SETTIMANALE"},{k:"playbook",l:"PLAYBOOK"},{k:"execution",l:"EXECUTION"},{k:"mindset",l:"CHAMPION MINDSET"}];
   if (loading) return (
     <div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:C.sub,fontFamily:"'IBM Plex Mono',monospace",fontSize:12}}>
       Caricamento...
@@ -3456,16 +3664,15 @@ function Journal() {
       {showExport    && <ExportModal   trades={trades} rv={rv}                        onClose={function(){setShowExport(false);}}/>}
       {showSettings  && <SettingsModal rv={rv}         onSave={saveSettings}          onClose={function(){setShowSettings(false);}}/>}
       {showTWImport  && <TWImportModal onClose={function(){setShowTWImport(false);}}  onSave={saveTWOhlc} existing={ohlcMeta}/>}
-      <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:22,paddingBottom:18,borderBottom:"1px solid "+C.border}}>
-        <div>
-          <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:36,fontWeight:700,color:C.text,letterSpacing:"0.04em",lineHeight:1}}>
-            {"Hello "}<span style={{color:C.gold}}>Noemi</span>
+      <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:18,marginBottom:22,paddingBottom:18,borderBottom:"1px solid "+C.border}}>
+        <div className="journal-identity">
+          <div className="journal-name-row">
+            <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:36,fontWeight:700,color:C.text,letterSpacing:"0",lineHeight:1}}>
+              {"Hello "}<span style={{color:C.gold}}>Noemi</span>
+            </div>
+            <span className="journal-trade-count">{trades.length+" trade"}</span>
           </div>
-          <div style={{fontSize:10,color:C.sub,marginTop:5,letterSpacing:"0.12em"}}>
-            {"ES FUTURES JOURNAL - "+trades.length+" trade - 1R = $"+rv}
-            {ohlcMeta && <span style={{color:C.green,marginLeft:10}}>{"- ES OHLC "+ohlcMeta.days+"gg"}</span>}
-            {ohlcMetaNQ && <span style={{color:C.blue,marginLeft:6}}>{"- NQ OHLC "+ohlcMetaNQ.days+"gg"}</span>}
-          </div>
+          <div className="journal-motto">{CHAMPION_QUOTES[0].text}</div>
         </div>
         <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:8}}>
           <span style={{fontSize:11,color:C.sub}}>{time}</span>
@@ -3488,6 +3695,7 @@ function Journal() {
       {tab==="settimanale" && <SettimanaleView/>}
       {tab==="playbook"    && <WeeklyPlaybookView/>}
       {tab==="execution"   && <ExecutionReviewView trades={trades} onOpenInitialStop={openInitialStopForTrade}/>}
+      {tab==="mindset"     && <ChampionMindsetView/>}
     </div>
   );
 }

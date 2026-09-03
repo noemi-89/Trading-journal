@@ -369,4 +369,5 @@ async function main() {
   });
   console.log(`OK - ${count} audit groups passed (including 100 sequence cases)`);
 }
-main().catch(error=>{console.error(error);process.exitCode=1;});
+module.exports = {environment, nodes, text, find, button, change, FakeStorage};
+if (require.main === module) main().catch(error=>{console.error(error);process.exitCode=1;});

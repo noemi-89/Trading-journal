@@ -4,7 +4,8 @@
 
 `index.html` adds `ChampionMindsetView` and `MindsetDateWheel`, appends the
 CHAMPION MINDSET tab, and simplifies the shared header. The trade counter still
-reads `trades.length`; the permanent motto is independent of the daily choice.
+reads `trades.length`; the permanent motto is `1% BETTER EVERY DAY.` and is
+independent of the daily choice.
 The white motto is centered between the greeting and Settings on desktop and
 uses the same 36 px font size as the greeting. On mobile it spans a separate
 centered row. The section title is centered above the content at 42 px.
@@ -25,8 +26,10 @@ The existing storage helper saves a JSON object under
 ```
 
 Valid IDs are `tenacity`, `pressure`, `recovery`, `rest`, `finish`, and
-`bullish_life` ("NO MATTER WHAT HAPPENS, WE ARE BULLISH ON LIFE.", Noemi).
-The original five IDs remain unchanged, preserving all existing associations.
+`bullish_life` ("NO MATTER WHAT HAPPENS, WE ARE BULLISH ON LIFE.", Noemi),
+and `winner_never_quits` ("A QUITTER NEVER WINS, AND A WINNER NEVER QUITS.",
+Napoleon Hill).
+All previously existing IDs remain unchanged, preserving every existing association.
 The quote text and authors live once in `CHAMPION_QUOTES`.
 An absent date has no choice. A new choice replaces the ID for that date only.
 Clicking an already selected quote leaves it selected and does not write again.
@@ -50,7 +53,7 @@ Champion Mindset without changes. The Calendar trade CSV is unchanged.
 - Keyboard: Up/Down for days, Page Up/Down for months, Shift + Page Up/Down for
   years, Home for today. Month shifts clamp to the last valid day.
 - Desktop uses a 72/28 grid with statements on the left and the wheel on the
-  right; mobile places the wheel above all six statements.
+  right; mobile places the wheel above all seven statements.
 - Quote selection uses native radio inputs with visible focus and one choice.
 
 ## Validation
@@ -62,11 +65,11 @@ $env:JOURNAL_BABEL_PATH = 'C:\path\to\babel.cjs'
 node tests/journal-mindset-tests.js
 ```
 
-The 15 test groups cover dynamic header counts, exact copy, local dates, leap
-days, navigation, persistence, independent dates, replacement, asynchronous date
+The 15 test groups cover the dynamic header count and motto, exact copy, local
+dates, leap days, navigation, persistence, independent dates, replacement, asynchronous date
 changes, write/read failures, malformed data, preservation of unrelated data,
 backup/restore, preservation of the original Playbook field, and persistence of
-Noemi's quote without changes to the previously supported quote IDs.
+the new quote without changes to the previously supported quote IDs.
 
 Browser checks use synthetic data and an isolated in-memory test store, never
 the user's browser data. Tested desktop and mobile layouts, native scrolling,

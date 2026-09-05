@@ -2619,6 +2619,7 @@ function WeeklyPlaybookView() {
 
 // CHAMPION MINDSET
 const CHAMPION_MINDSET_KEY = "jnl:v2:champion_mindset";
+const JOURNAL_MOTTO = "1% BETTER EVERY DAY.";
 const CHAMPION_QUOTES = [
   {id:"tenacity", text:"VICTORY BELONGS TO THE MOST TENACIOUS.", author:"Roland-Garros"},
   {id:"pressure", text:"PRESSURE IS A PRIVILEGE.", author:"Billie Jean King"},
@@ -2626,6 +2627,7 @@ const CHAMPION_QUOTES = [
   {id:"rest", text:"REST AT THE END, NOT IN THE MIDDLE.", author:"Kobe Bryant"},
   {id:"finish", text:"FIRST, YOU HAVE TO FINISH.", author:"Michael Schumacher"},
   {id:"bullish_life", text:"NO MATTER WHAT HAPPENS, WE ARE BULLISH ON LIFE.", author:"Noemi"},
+  {id:"winner_never_quits", text:"A QUITTER NEVER WINS, AND A WINNER NEVER QUITS.", author:"Napoleon Hill"},
 ];
 function mindsetToday(now) {
   const d = now || new Date();
@@ -3680,7 +3682,7 @@ function Journal() {
             <span className="journal-trade-count">{trades.length+" trade"}</span>
           </div>
         </div>
-        <div className="journal-motto">{CHAMPION_QUOTES[0].text}</div>
+        <div className="journal-motto">{JOURNAL_MOTTO}</div>
         <div className="journal-settings">
           <span style={{fontSize:11,color:C.sub}}>{time}</span>
           <button onClick={function(){setShowSettings(true);}} style={{background:"transparent",border:"1px solid "+C.border,borderRadius:4,color:C.sub,fontSize:10,padding:"5px 14px",cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.1em",textTransform:"uppercase"}}>

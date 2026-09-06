@@ -353,6 +353,29 @@ async function main() {
     find(view,n=>n.type==="input"&&n.props.type==="file").props.onChange({target:{files:[{text:"bad"}]}}); await view.flush();
     assert.ok(button(view,"SALVA E ATTIVA").props.disabled);
     assert.ok(!text(view.tree).includes("150000 candele"));
+    assert.ok(text(view.tree).includes("CSV NON RICONOSCIUTO"));
+  });
+  await test("TradingView rejects malformed files and incomplete trade windows", async () => {
+    const e=environment();
+    assert.throws(() => e.context.parseTWCsv(""), /file e vuoto/);
+    assert.throws(() => e.context.parseTWCsv("foo,bar,baz\n1,2,3"), /colonne TradingView/);
+
+    const linked=trade("m1",500,{date:"2026-09-01",entry_time:"09:30",exit_time:"09:32",product:"MES",initial_stop_price:6990});
+    const start=e.context.etToUnix(linked.date,linked.entry_time);
+    const complete=[-1,0,1,2,3].map(i=>({time:start+i*60,high:7010+i,low:6990-i}));
+    const valid=e.context.calcMaeMfe(linked,complete,[]);
+    assert.equal(valid.available,true);
+    assert.equal(valid.candles,3);
+    assert.equal(valid.timeframe_seconds,60);
+
+    const incomplete=complete.filter(c=>c.time!==start+60);
+    const rejected=e.context.calcMaeMfe(linked,incomplete,[]);
+    assert.equal(rejected.available,false);
+    assert.match(rejected.reason,/coverage incomplete/);
+    assert.throws(
+      () => e.context.validateTWOhlcImportCoverage([linked],incomplete,"ES"),
+      /CSV INCOMPLETO/
+    );
   });
   await test("Actual OHLC importer rolls back candles and meta if the trade-cache write fails", async () => {
     const original=[trade(1,500)];
@@ -361,8 +384,10 @@ async function main() {
     button(view,"CALENDARIO").props.onClick(); await view.flush();
     find(view,n=>n.type===e.context.CalendarioView).props.onTWImport(); await view.flush();
     const modal=find(view,n=>n.type===e.context.TWImportModal);
+    const first=e.context.etToUnix("2026-09-01","09:35");
+    const completeBars=Array.from({length:6},(_,i)=>({time:first+i*300,high:7010+i,low:6990-i}));
     e.target.failAt=e.target.writes+3;
-    await assert.rejects(modal.props.onSave([{time:1788273000,high:7010,low:6990},{time:1788273300,high:7011,low:6989}],{days:1}));
+    await assert.rejects(modal.props.onSave(completeBars,{days:1}));
     await view.flush();
     assert.deepEqual(e.target.values,stored);
     assert.equal(find(view,n=>n.type===e.context.CalendarioView).props.ohlcMeta.days,0);

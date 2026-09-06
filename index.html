@@ -740,31 +740,37 @@ function detectOHLCProduct(data) {
 // MAE / MFE
 const TW_BAR_SECONDS = 300;
 function parseTWCsv(text) {
-  const lines = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim().split("\n").filter(function(l) { return l.trim(); });
-  if (lines.length < 2) return [];
+  const raw = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (!raw) throw new Error("il file e vuoto.");
+  const lines = raw.split("\n").filter(function(l) { return l.trim(); });
+  if (lines.length < 2) throw new Error("non contiene righe di candele.");
   const header = parseCSVLine(lines[0]).map(function(h){ return String(h || "").trim().toLowerCase(); });
-  function findCol(names, fallback) {
+  function findCol(names) {
     for (let i = 0; i < names.length; i++) {
       const idx = header.indexOf(names[i]);
       if (idx >= 0) return idx;
     }
-    return fallback;
+    return -1;
   }
-  const timeIdx = findCol(["time","timestamp","unix","date"], 0);
-  const openIdx = findCol(["open"], 1);
-  const highIdx = findCol(["high"], 2);
-  const lowIdx  = findCol(["low"], 3);
-  const closeIdx = findCol(["close"], 4);
-  const symbolIdx = findCol(["symbol","ticker","instrument"], -1);
+  const timeIdx = findCol(["time","timestamp","unix","date"]);
+  const openIdx = findCol(["open"]);
+  const highIdx = findCol(["high"]);
+  const lowIdx  = findCol(["low"]);
+  const closeIdx = findCol(["close"]);
+  const symbolIdx = findCol(["symbol","ticker","instrument"]);
+  if (timeIdx < 0 || highIdx < 0 || lowIdx < 0) {
+    throw new Error("mancano le colonne TradingView time, high o low.");
+  }
   const byTime = {};
+  const requiredLastIdx = Math.max(timeIdx, highIdx, lowIdx);
   for (let i = 1; i < lines.length; i++) {
     const p = parseCSVLine(lines[i]);
-    if (p.length < 4) continue;
+    if (p.length <= requiredLastIdx) continue;
     let time = parseTWTime(p[timeIdx]);
-    const open = parseMoney(p[openIdx]);
+    const open = openIdx >= 0 ? parseMoney(p[openIdx]) : NaN;
     const high = parseMoney(p[highIdx]);
     const low = parseMoney(p[lowIdx]);
-    const close = parseMoney(p[closeIdx]);
+    const close = closeIdx >= 0 ? parseMoney(p[closeIdx]) : NaN;
     const symbol = symbolIdx >= 0 ? String(p[symbolIdx] || "").trim() : "";
     if (time && !isNaN(high) && !isNaN(low) && high >= low) {
       const key = (symbol || "chart") + "_" + time;
@@ -777,7 +783,9 @@ function parseTWCsv(text) {
       }
     }
   }
-  return Object.keys(byTime).map(function(k){ return byTime[k]; }).sort(function(a,b){ return a.time - b.time; });
+  const parsed = Object.keys(byTime).map(function(k){ return byTime[k]; }).sort(function(a,b){ return a.time - b.time; });
+  if (parsed.length < 2) throw new Error("contiene meno di due candele OHLC valide.");
+  return parsed;
 }
 function parseTWTime(v) {
   const raw = String(v || "").trim();
@@ -816,6 +824,91 @@ function countOhlcGaps(data, timeframeSeconds) {
     if (d > timeframeSeconds * 1.5 && d <= 3600) gaps++;
   }
   return gaps;
+}
+function buildOhlcCoverageContext(ohlcData) {
+  if (!ohlcData || !ohlcData.length) return null;
+  const timeframe = inferOhlcTimeframeSeconds(ohlcData);
+  if (!timeframe || !isFinite(timeframe) || timeframe <= 0) return null;
+  let sourceStart = Infinity;
+  let sourceEnd = -Infinity;
+  let phaseSource = null;
+  for (let i = 0; i < ohlcData.length; i++) {
+    const time = Number(ohlcData[i].time);
+    if (!isFinite(time) || time <= 0) continue;
+    if (phaseSource == null) phaseSource = time;
+    if (time < sourceStart) sourceStart = time;
+    if (time > sourceEnd) sourceEnd = time;
+  }
+  if (phaseSource == null) return null;
+  const phase = ((phaseSource % timeframe) + timeframe) % timeframe;
+  return {timeframe_seconds:timeframe, source_start:sourceStart, source_end:sourceEnd, phase:phase};
+}
+function inspectOhlcTradeCoverage(trade, ohlcData, coverageContext) {
+  if (!trade || !trade.date || !trade.entry_time || !trade.exit_time || !ohlcData || !ohlcData.length) {
+    return {complete:false, source_overlap:false, candles:[], expected_candles:0, missing_candles:0, timeframe_seconds:null};
+  }
+  const context = coverageContext || buildOhlcCoverageContext(ohlcData);
+  if (!context) return {complete:false, source_overlap:false, candles:[], expected_candles:0, missing_candles:0, timeframe_seconds:null};
+  const timeframe = context.timeframe_seconds;
+  const phase = context.phase;
+  const entryUnix = etToUnix(trade.date, trade.entry_time);
+  let exitUnix = etToUnix(trade.date, trade.exit_time);
+  if (exitUnix < entryUnix) exitUnix += 86400;
+  const sourceOverlap = exitUnix >= context.source_start && entryUnix <= context.source_end;
+  const candles = ohlcData.filter(function(c){ return c.time >= entryUnix && c.time <= exitUnix; });
+  // Keep historical M5 behavior unchanged; strict continuity protects new M1 imports.
+  if (timeframe > 60) {
+    return {
+      complete:candles.length > 0,
+      source_overlap:sourceOverlap,
+      candles:candles,
+      expected_candles:candles.length,
+      missing_candles:0,
+      timeframe_seconds:timeframe,
+    };
+  }
+  const firstExpected = Math.ceil((entryUnix - phase) / timeframe) * timeframe + phase;
+  const lastExpected = Math.floor((exitUnix - phase) / timeframe) * timeframe + phase;
+  if (firstExpected > lastExpected) {
+    return {complete:false, source_overlap:sourceOverlap, candles:candles, expected_candles:0, missing_candles:0, timeframe_seconds:timeframe};
+  }
+  const present = {};
+  for (let i = 0; i < candles.length; i++) present[candles[i].time] = true;
+  const expected = Math.floor((lastExpected - firstExpected) / timeframe) + 1;
+  let missing = 0;
+  for (let ts = firstExpected; ts <= lastExpected; ts += timeframe) {
+    if (!present[ts]) missing++;
+  }
+  return {
+    complete:missing === 0,
+    source_overlap:sourceOverlap,
+    candles:candles,
+    expected_candles:expected,
+    missing_candles:missing,
+    timeframe_seconds:timeframe,
+  };
+}
+function incompleteOhlcImportTrades(trades, data, product) {
+  if (!Array.isArray(trades) || !Array.isArray(data) || !data.length) return [];
+  const coverageContext = buildOhlcCoverageContext(data);
+  if (!coverageContext) return [];
+  return trades.map(function(trade){
+    if (!trade || productFamily(trade) !== product || getTradeResult(trade) === "Open" || !isMaeMfeInScope(trade)) return null;
+    const coverage = inspectOhlcTradeCoverage(trade, data, coverageContext);
+    if (!coverage.source_overlap || coverage.expected_candles < 1 || coverage.complete) return null;
+    return {trade:trade, coverage:coverage};
+  }).filter(Boolean);
+}
+function validateTWOhlcImportCoverage(trades, data, product) {
+  const incomplete = incompleteOhlcImportTrades(trades, data, product);
+  if (!incomplete.length) return {incomplete:0, missing:0};
+  const missing = incomplete.reduce(function(sum, item){ return sum + item.coverage.missing_candles; }, 0);
+  const first = incomplete[0].trade;
+  throw new Error(
+    "CSV INCOMPLETO - mancano " + missing + " candele in " + incomplete.length +
+    " trade (es. " + first.date + " " + first.entry_time + "-" + first.exit_time + "). " +
+    "Nessun dato e stato salvato. Riscarica il CSV da TradingView includendo l'intero intervallo."
+  );
 }
 function unixToETParts(ts) {
   try {
@@ -1184,8 +1277,10 @@ function calcMaeMfe(trade, ohlcES, ohlcNQ) {
   const entryUnix = etToUnix(trade.date, trade.entry_time);
   let exitUnix  = etToUnix(trade.date, trade.exit_time);
   if (exitUnix < entryUnix) exitUnix += 86400;
-  const candles = ohlcData.filter(function(c) { return c.time >= entryUnix && c.time <= exitUnix; });
+  const coverage = inspectOhlcTradeCoverage(trade, ohlcData);
+  const candles = coverage.candles;
   if (!candles.length) return maeMfeUnavailable("no candle inside trade window");
+  if (!coverage.complete) return maeMfeUnavailable("OHLC coverage incomplete: " + coverage.missing_candles + " candle missing");
   let maxHigh = -Infinity; let minLow = Infinity;
   for (let i = 0; i < candles.length; i++) {
     if (candles[i].high > maxHigh) maxHigh = candles[i].high;
@@ -1209,7 +1304,7 @@ function calcMaeMfe(trade, ohlcES, ohlcNQ) {
     available:true,
     status:"available",
     source:"tradingview_ohlc",
-    timeframe_seconds:inferOhlcTimeframeSeconds(ohlcData),
+    timeframe_seconds:coverage.timeframe_seconds,
     window_start_et:trade.date + " " + trade.entry_time,
     window_end_et:trade.date + " " + trade.exit_time,
     entry_unix:entryUnix,
@@ -3210,7 +3305,7 @@ function ExecutionReviewView({trades, onOpenInitialStop}) {
 }
 
 // TW IMPORT MODAL
-function TWImportModal({onClose, onSave, existing}) {
+function TWImportModal({onClose, onSave, existing, trades}) {
   const [parsed,  setParsed]  = useState(null);
   const [error,   setError]   = useState("");
   const [saving,  setSaving]  = useState(false);
@@ -3221,7 +3316,7 @@ function TWImportModal({onClose, onSave, existing}) {
     reader.onload = function(ev) {
       try {
         const data = parseTWCsv(ev.target.result);
-        if (!data.length){ setError("Nessuna candela valida."); return; }
+        if (!data.length) throw new Error("nessuna candela valida.");
         const first = unixToETDate(data[0].time);
         const last  = unixToETDate(data[data.length - 1].time);
         const daySet = {};
@@ -3229,10 +3324,17 @@ function TWImportModal({onClose, onSave, existing}) {
         const days = Object.keys(daySet).length;
         const timeframe = inferOhlcTimeframeSeconds(data);
         const gaps = countOhlcGaps(data, timeframe);
+        const product = detectOHLCProduct(data);
+        validateTWOhlcImportCoverage(trades || [], data, product);
         setParsed({data:data,first:first,last:last,n:data.length,days:days,timeframe_seconds:timeframe,gaps:gaps}); setError("");
-      } catch(err){ setError("Errore: "+err.message); }
+      } catch(err){
+        const message = String(err && err.message || "formato non valido.");
+        setError(/^CSV INCOMPLETO/.test(message)
+          ? message
+          : "CSV NON RICONOSCIUTO - " + message + " Nessun dato e stato salvato. Riscarica il file da TradingView.");
+      }
     };
-    reader.onerror = function(){ setError("Lettura del file non riuscita."); };
+    reader.onerror = function(){ setError("CSV NON RICONOSCIUTO - lettura del file non riuscita. Nessun dato e stato salvato. Riscarica il file da TradingView."); };
     reader.readAsText(file);
   }
   async function handleSave(){
@@ -3249,7 +3351,7 @@ function TWImportModal({onClose, onSave, existing}) {
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
           <div>
             <div style={{fontSize:13,color:C.text,fontWeight:600,letterSpacing:"0.08em"}}>IMPORT OHLC - TRADINGVIEW</div>
-            <div style={{fontSize:10,color:C.sub,marginTop:3}}>{"Toolbar TW in alto -> Export chart data -> ES M5 -> Export"}</div>
+            <div style={{fontSize:10,color:C.sub,marginTop:3}}>{"Toolbar TW in alto -> Export chart data -> grafico ES/NQ M1 -> Export"}</div>
           </div>
           <button onClick={onClose} style={{background:"transparent",border:"none",color:C.sub,fontSize:22,cursor:"pointer",lineHeight:1}}>{"X"}</button>
         </div>
@@ -3266,6 +3368,7 @@ function TWImportModal({onClose, onSave, existing}) {
             </div>
           ) : (
             <div>
+              <div style={{fontSize:10,color:C.green,fontWeight:700,letterSpacing:"0.1em",marginBottom:5}}>CSV RICONOSCIUTO</div>
               <div style={{fontSize:14,color:C.green,fontWeight:700,marginBottom:4}}>{parsed.n+" candele caricate"}</div>
               <div style={{fontSize:12,color:C.text,marginBottom:4}}>{parsed.first+" -> "+parsed.last+" - "+parsed.days+" giorni"}</div>
               <div style={{fontSize:10,color:C.sub,marginBottom:4}}>{"Timeframe rilevato: "+Math.round(parsed.timeframe_seconds/60)+"m - gap intraday: "+parsed.gaps}</div>
@@ -3276,7 +3379,7 @@ function TWImportModal({onClose, onSave, existing}) {
             </div>
           )}
         </div>
-        {error && <div style={{marginBottom:12,padding:"8px 12px",background:C.red+"10",border:"1px solid "+C.red+"30",borderRadius:4,fontSize:11,color:C.red}}>{error}</div>}
+        {error && <div role="alert" aria-live="assertive" style={{marginBottom:12,padding:"11px 13px",background:C.red+"12",border:"1px solid "+C.red+"70",borderRadius:4,fontSize:11,color:C.red,fontWeight:700,lineHeight:1.6}}>{error}</div>}
         <div style={{padding:"10px 14px",background:C.gold+"08",border:"1px solid "+C.gold+"25",borderRadius:6,marginBottom:16}}>
           <div style={{fontSize:10,color:C.gold,fontWeight:600,marginBottom:3}}>Timezone</div>
           <div style={{fontSize:10,color:C.sub,lineHeight:1.6}}>{"TradingView UTC -> Journal converte in ET per il matching con trade Tradovate."}</div>
@@ -3606,7 +3709,9 @@ function Journal() {
     setShowSettings(false);
   }
   async function saveTWOhlc(data, meta){
+    if (!Array.isArray(data) || data.length < 2) throw new Error("CSV NON RICONOSCIUTO - servono almeno due candele OHLC valide.");
     const product = detectOHLCProduct(data);
+    validateTWOhlcImportCoverage(trades, data, product);
     meta.product = product;
     meta.timeframe_seconds = inferOhlcTimeframeSeconds(data);
     meta.gaps = countOhlcGaps(data, meta.timeframe_seconds);
@@ -3672,7 +3777,7 @@ function Journal() {
       {showImport    && <ImportModal   onClose={function(){setShowImport(false);}}   trades={trades} setTrades={setTrades} ohlcData={ohlcData} ohlcNQ={ohlcNQ}/>}
       {showExport    && <ExportModal   trades={trades} rv={rv}                        onClose={function(){setShowExport(false);}}/>}
       {showSettings  && <SettingsModal rv={rv}         onSave={saveSettings}          onClose={function(){setShowSettings(false);}}/>}
-      {showTWImport  && <TWImportModal onClose={function(){setShowTWImport(false);}}  onSave={saveTWOhlc} existing={ohlcMeta}/>}
+      {showTWImport  && <TWImportModal onClose={function(){setShowTWImport(false);}}  onSave={saveTWOhlc} existing={ohlcMeta} trades={trades}/>}
       <div className="journal-header">
         <div className="journal-identity">
           <div className="journal-name-row">

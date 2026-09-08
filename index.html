@@ -1286,6 +1286,25 @@ function calcMaeMfe(trade, ohlcES, ohlcNQ) {
     if (candles[i].high > maxHigh) maxHigh = candles[i].high;
     if (candles[i].low  < minLow)  minLow  = candles[i].low;
   }
+  function boundarySidesForExtreme(key, value) {
+    if (coverage.timeframe_seconds !== 60) return [];
+    const interiorHasSameExtreme = candles.some(function(c){
+      return c.time !== entryUnix && c.time !== exitUnix && c[key] === value;
+    });
+    if (interiorHasSameExtreme) return [];
+    const sides = [];
+    candles.forEach(function(c){
+      if (c[key] !== value) return;
+      if (c.time === entryUnix && sides.indexOf("entry") < 0) sides.push("entry");
+      if (c.time === exitUnix && sides.indexOf("exit") < 0) sides.push("exit");
+    });
+    return sides;
+  }
+  const highBoundarySides = boundarySidesForExtreme("high", maxHigh);
+  const lowBoundarySides = boundarySidesForExtreme("low", minLow);
+  const maeBoundarySides = trade.direction === "Buy" ? lowBoundarySides : highBoundarySides;
+  const mfeBoundarySides = trade.direction === "Buy" ? highBoundarySides : lowBoundarySides;
+  const boundaryAmbiguous = maeBoundarySides.length > 0 || mfeBoundarySides.length > 0;
   const ep = parseFloat(trade.entry_price); const xp = parseFloat(trade.exit_price);
   let mae; let mfe; let pnlPts;
   if (trade.direction === "Buy") { mae = Math.max(0, ep - minLow); mfe = Math.max(0, maxHigh - ep); pnlPts = xp - ep; }
@@ -1305,6 +1324,7 @@ function calcMaeMfe(trade, ohlcES, ohlcNQ) {
     status:"available",
     source:"tradingview_ohlc",
     timeframe_seconds:coverage.timeframe_seconds,
+    timeframe:coverage.timeframe_seconds === 60 ? "1m" : (coverage.timeframe_seconds === 300 ? "5m" : coverage.timeframe_seconds + "s"),
     window_start_et:trade.date + " " + trade.entry_time,
     window_end_et:trade.date + " " + trade.exit_time,
     entry_unix:entryUnix,
@@ -1332,6 +1352,12 @@ function calcMaeMfe(trade, ohlcES, ohlcNQ) {
     r_status:initialRiskPoints ? "available" : (initialStopInfo.status === "ambiguous" ? "ambiguous_initial_stop" : "missing_initial_stop"),
     dollars_status:(pointValue && qty) ? "available" : "unavailable_point_value_or_quantity",
     efficiency:efficiency,
+    boundary_ambiguity:{
+      potential:boundaryAmbiguous,
+      mae_sides:maeBoundarySides,
+      mfe_sides:mfeBoundarySides,
+      reason:boundaryAmbiguous ? "MAE/MFE extreme on an entry or exit M1 candle; intrabar order is unavailable" : null,
+    },
   };
 }
 function percentile(sorted, p) {

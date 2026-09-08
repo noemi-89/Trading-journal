@@ -367,6 +367,10 @@ async function main() {
     assert.equal(valid.available,true);
     assert.equal(valid.candles,3);
     assert.equal(valid.timeframe_seconds,60);
+    assert.equal(valid.timeframe,"1m");
+    assert.equal(valid.boundary_ambiguity.potential,true);
+    assert.equal(JSON.stringify(valid.boundary_ambiguity.mae_sides),'["exit"]');
+    assert.equal(JSON.stringify(valid.boundary_ambiguity.mfe_sides),'["exit"]');
 
     const incomplete=complete.filter(c=>c.time!==start+60);
     const rejected=e.context.calcMaeMfe(linked,incomplete,[]);

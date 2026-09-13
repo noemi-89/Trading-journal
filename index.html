@@ -46,6 +46,20 @@
     .mindset-statement.is-selected .mindset-quote-text { color: #F5A020; }
     .mindset-author { display: block; color: #8A96B0; font-size: 11px; line-height: 1.4; margin-top: 6px; letter-spacing: 0; }
     .mindset-feedback { color: #E84545; font-size: 12px; line-height: 1.5; margin-bottom: 14px; }
+    .trading-guard-stop-launch { position: fixed; right: 22px; bottom: 22px; z-index: 1900; min-width: 112px; min-height: 54px; padding: 12px 24px; border: 2px solid #FF6B6B; border-radius: 8px; background: #B91C1C; color: #FFFFFF; box-shadow: 0 0 0 4px #E8454524, 0 12px 34px #00000088; font: 700 25px/1 'Barlow Condensed',sans-serif; letter-spacing: 0.12em; cursor: pointer; }
+    .trading-guard-stop-launch:hover, .trading-guard-stop-launch:focus-visible { background: #D12626; outline: 2px solid #FFFFFF; outline-offset: 3px; }
+    .trading-guard-overlay { position: fixed; inset: 0; z-index: 2000; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,0.94); }
+    .trading-guard-dialog { width: 100%; max-width: 620px; max-height: 94vh; overflow-y: auto; padding: 28px; border: 1px solid #E84545; border-radius: 12px; background: #0F0F13; box-shadow: 0 24px 70px #000000CC; }
+    .trading-guard-confirmation { display: flex; align-items: center; gap: 12px; min-height: 50px; padding: 12px 14px; border: 1px solid #383848; border-radius: 6px; background: #16161B; color: #EDE8DC; font-size: 12px; line-height: 1.45; cursor: pointer; }
+    .trading-guard-confirmation + .trading-guard-confirmation { margin-top: 10px; }
+    .trading-guard-confirmation input { flex: 0 0 auto; width: 20px; height: 20px; accent-color: #E84545; }
+    .trading-guard-hold { position: relative; isolation: isolate; width: 100%; min-height: 62px; margin-top: 18px; overflow: hidden; border: 2px solid #E84545; border-radius: 7px; background: #2A1114; color: #FFFFFF; font: 700 17px/1.25 'Barlow Condensed',sans-serif; letter-spacing: 0.08em; cursor: pointer; touch-action: none; user-select: none; }
+    .trading-guard-hold:disabled { border-color: #383848; background: #16161B; color: #616B82; cursor: not-allowed; }
+    .trading-guard-hold-fill { position: absolute; inset: 0 auto 0 0; z-index: -1; width: 0; background: #B91C1C; }
+    .trading-guard-hold.is-holding .trading-guard-hold-fill { width: 100%; transition: width 2s linear; }
+    .pattern-interrupt-rules { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; margin: 24px 0; }
+    .pattern-interrupt-rule { min-width: 0; padding: 18px 16px; border: 1px solid #E8454560; border-radius: 8px; background: #E845450D; color: #FFFFFF; font: 700 22px/1.18 'Barlow Condensed',sans-serif; text-align: center; overflow-wrap: anywhere; }
+    .pattern-interrupt-flow { padding: 22px 16px; border-top: 1px solid #383848; border-bottom: 1px solid #383848; color: #F5A020; font: 700 30px/1.25 'Barlow Condensed',sans-serif; text-align: center; letter-spacing: 0.035em; overflow-wrap: anywhere; }
     @media (max-width: 760px) {
       .journal-header { grid-template-columns: minmax(0,1fr) auto; gap: 22px 16px; }
       .journal-settings { grid-column: 2; grid-row: 1; }
@@ -55,6 +69,10 @@
       .mindset-wheel { --wheel-padding: 48px; height: 144px; }
       .mindset-quote-text { font-size: 25px; }
       .mindset-statement { padding: 12px 14px; }
+      .trading-guard-stop-launch { right: 14px; bottom: 14px; min-width: 98px; min-height: 50px; padding: 10px 18px; font-size: 23px; }
+      .trading-guard-dialog { padding: 22px 18px; }
+      .pattern-interrupt-rules { grid-template-columns: minmax(0,1fr); }
+      .pattern-interrupt-flow { font-size: 24px; }
     }
     @media (prefers-reduced-motion: reduce) {
       .mindset-statement { transition: none; }
@@ -3663,6 +3681,230 @@ function SettingsModal({rv, onSave, onClose}) {
   );
 }
 
+// PATTERN INTERRUPT / TRADING GUARD
+// This feature deliberately has no storage access and no broker/trade dependency.
+const TRADING_GUARD_ENDPOINT = "http://127.0.0.1:48173/v1/stop";
+const TRADING_GUARD_INTENT = "stop-after-flat-confirmation";
+const TRADING_GUARD_HOLD_MS = 2000;
+// A real Cold Turkey start plus the verified status read can take over nine seconds.
+// Keep the UI conservative: wait long enough for verification instead of showing a false failure.
+const TRADING_GUARD_TIMEOUT_MS = 20000;
+const TRADING_GUARD_FAILURE = "BLOCCO NON CONFERMATO \u2014 APRI COLD TURKEY ORA.";
+function isTradingGuardUuid(value) {
+  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+function createTradingGuardRequestId(provider) {
+  const source = provider || (typeof crypto !== "undefined" ? crypto : null);
+  if (source && typeof source.randomUUID === "function") {
+    const generated = source.randomUUID();
+    if (isTradingGuardUuid(generated)) return generated;
+  }
+  if (source && typeof source.getRandomValues === "function") {
+    const bytes = new Uint8Array(16);
+    source.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 15) | 64;
+    bytes[8] = (bytes[8] & 63) | 128;
+    const hex = Array.from(bytes,function(byte){return byte.toString(16).padStart(2,"0");}).join("");
+    return hex.slice(0,8)+"-"+hex.slice(8,12)+"-"+hex.slice(12,16)+"-"+hex.slice(16,20)+"-"+hex.slice(20);
+  }
+  throw new Error("Generatore UUID sicuro non disponibile.");
+}
+function validateTradingGuardResponse(payload, requestId) {
+  if (!payload || payload.ok !== true || payload.status !== "Enabled") return null;
+  if (!isTradingGuardUuid(requestId) || payload.requestId !== requestId) return null;
+  if (!["block_started","already_active","idempotent_replay"].includes(payload.code)) return null;
+  if (payload.session !== "AM" && payload.session !== "PM") return null;
+  const expectedCutoff = payload.session === "AM" ? "12:00 ET" : "16:00 ET";
+  const expectedBlockName = "TRADING GUARD "+payload.session+" SESSION";
+  const expectedMessage = "TRADINGVIEW BLOCCATO FINO ALLE "+expectedCutoff;
+  const expectedInstruction = "ALZATI E VAI SULLA BIKE.";
+  if (payload.cutoffLabel !== expectedCutoff) return null;
+  if (payload.blockName !== expectedBlockName) return null;
+  if (payload.message !== expectedMessage || payload.instruction !== expectedInstruction) return null;
+  return {
+    ok:true,
+    status:"Enabled",
+    session:payload.session,
+    cutoffLabel:expectedCutoff,
+    message:expectedMessage,
+    instruction:expectedInstruction,
+  };
+}
+async function requestTradingGuardStop(requestId) {
+  if (!isTradingGuardUuid(requestId)) throw new Error("Request ID non valido.");
+  if (typeof fetch !== "function") throw new Error("Servizio locale non raggiungibile.");
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timeout = setTimeout(function(){if(controller)controller.abort();},TRADING_GUARD_TIMEOUT_MS);
+  try {
+    const response = await fetch(TRADING_GUARD_ENDPOINT,{
+      method:"POST",
+      mode:"cors",
+      cache:"no-store",
+      credentials:"omit",
+      headers:{
+        "Content-Type":"application/json",
+        "X-Trading-Guard-Intent":TRADING_GUARD_INTENT,
+      },
+      body:JSON.stringify({requestId:requestId,confirmedFlat:true,confirmedNoPendingOrders:true}),
+      signal:controller ? controller.signal : undefined,
+    });
+    if (!response || response.ok !== true) throw new Error("Risposta HTTP non valida.");
+    const verified = validateTradingGuardResponse(await response.json(),requestId);
+    if (!verified) throw new Error("Conferma Cold Turkey non valida.");
+    return verified;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+function TradingGuardStopButton({onOpen}) {
+  return <button type="button" className="trading-guard-stop-launch" onClick={onOpen} aria-label="Apri Pattern Interrupt STOP">STOP</button>;
+}
+function TradingGuardEmergencyModal({onClose}) {
+  const [confirmedFlat,setConfirmedFlat] = useState(false);
+  const [confirmedNoOrders,setConfirmedNoOrders] = useState(false);
+  const [holding,setHolding] = useState(false);
+  const [phase,setPhase] = useState("idle");
+  const [result,setResult] = useState(null);
+  const holdTimer = useRef(null);
+  const requestActive = useRef(false);
+  const requestId = useRef(null);
+  const confirmedSuccess = useRef(false);
+  const controllerAlive = useRef(true);
+  const canArm = confirmedFlat && confirmedNoOrders && phase !== "requesting" && phase !== "success";
+  function cancelHold() {
+    if (holdTimer.current !== null) {
+      clearTimeout(holdTimer.current);
+      holdTimer.current = null;
+    }
+    setHolding(false);
+  }
+  useEffect(function(){
+    controllerAlive.current = true;
+    function cancelFromWindow(){cancelHold();}
+    function cancelWhenHidden(){if(typeof document !== "undefined" && document.hidden)cancelHold();}
+    if (typeof window !== "undefined" && window.addEventListener) window.addEventListener("blur",cancelFromWindow);
+    if (typeof document !== "undefined" && document.addEventListener) document.addEventListener("visibilitychange",cancelWhenHidden);
+    return function(){
+      controllerAlive.current = false;
+      cancelHold();
+      if (typeof window !== "undefined" && window.removeEventListener) window.removeEventListener("blur",cancelFromWindow);
+      if (typeof document !== "undefined" && document.removeEventListener) document.removeEventListener("visibilitychange",cancelWhenHidden);
+    };
+  },[]);
+  async function activate() {
+    if (requestActive.current || confirmedSuccess.current) return;
+    requestActive.current = true;
+    setPhase("requesting"); setResult(null);
+    try {
+      if (!requestId.current) requestId.current = createTradingGuardRequestId();
+      const verified = await requestTradingGuardStop(requestId.current);
+      if (!controllerAlive.current) return;
+      confirmedSuccess.current = true;
+      setResult(verified); setPhase("success");
+    } catch(error) {
+      if (controllerAlive.current) { setResult(null); setPhase("error"); }
+    } finally {
+      requestActive.current = false;
+    }
+  }
+  function beginHold(event) {
+    if (!canArm || requestActive.current || confirmedSuccess.current || holdTimer.current !== null) return;
+    if (event && event.type === "pointerdown" && event.button != null && event.button !== 0) return;
+    if (event && event.preventDefault) event.preventDefault();
+    if (event && event.currentTarget && event.pointerId != null && event.currentTarget.setPointerCapture) {
+      try { event.currentTarget.setPointerCapture(event.pointerId); } catch(e) {}
+    }
+    setPhase("idle"); setResult(null); setHolding(true);
+    holdTimer.current = setTimeout(function(){
+      holdTimer.current = null;
+      setHolding(false);
+      activate();
+    },TRADING_GUARD_HOLD_MS);
+  }
+  function handleKeyDown(event) {
+    if ((event.key === "Enter" || event.key === " ") && !event.repeat) beginHold(event);
+  }
+  function handleKeyUp(event) {
+    if (event.key === "Enter" || event.key === " ") { if(event.preventDefault)event.preventDefault(); cancelHold(); }
+  }
+  const closeDisabled = phase === "requesting" || holding;
+  return (
+    <div className="trading-guard-overlay" role="presentation">
+      <div className="trading-guard-dialog" role="dialog" aria-modal="true" aria-labelledby="trading-guard-title">
+        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:20,marginBottom:18}}>
+          <div>
+            <div style={{fontSize:10,color:C.red,fontWeight:700,letterSpacing:"0.16em",marginBottom:7}}>PATTERN INTERRUPT</div>
+            <h1 id="trading-guard-title" style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:34,lineHeight:1,color:C.text,letterSpacing:"0.04em"}}>STOP TRADING</h1>
+          </div>
+          <button type="button" onClick={function(){if(!closeDisabled)onClose();}} disabled={closeDisabled} aria-label="Chiudi Pattern Interrupt" style={{border:0,background:"transparent",color:closeDisabled?C.muted:C.sub,fontSize:24,lineHeight:1,cursor:closeDisabled?"not-allowed":"pointer"}}>X</button>
+        </div>
+        {phase !== "success" && (
+          <>
+            <div style={{padding:"13px 15px",border:"1px solid "+C.gold+"55",borderRadius:6,background:C.gold+"0B",color:C.gold,fontSize:13,fontWeight:700,lineHeight:1.55,marginBottom:16}}>{"FLAT \u2192 CANCEL ALL \u2192 VERIFY \u2192 STOP \u2192 BIKE"}</div>
+            <div style={{fontSize:11,color:C.sub,lineHeight:1.65,marginBottom:16}}>Trading Guard non controlla la posizione e non legge, invia, modifica, cancella o liquida ordini. Verifica manualmente entrambe le condizioni prima di continuare.</div>
+            <label className="trading-guard-confirmation">
+              <input type="checkbox" checked={confirmedFlat} disabled={phase === "requesting"} onChange={function(event){cancelHold();setConfirmedFlat(event.target.checked);}}/>
+              <span>CONFERMO: POSIZIONE FLAT</span>
+            </label>
+            <label className="trading-guard-confirmation">
+              <input type="checkbox" checked={confirmedNoOrders} disabled={phase === "requesting"} onChange={function(event){cancelHold();setConfirmedNoOrders(event.target.checked);}}/>
+              <span>CONFERMO: NESSUN ORDINE PENDENTE</span>
+            </label>
+            <button type="button" className={"trading-guard-hold"+(holding?" is-holding":"")} disabled={!canArm}
+              onPointerDown={beginHold} onPointerUp={cancelHold} onPointerCancel={cancelHold} onPointerLeave={cancelHold}
+              onKeyDown={handleKeyDown} onKeyUp={handleKeyUp} onBlur={cancelHold} onContextMenu={function(e){e.preventDefault();}} onClick={function(e){e.preventDefault();}}>
+              <span className="trading-guard-hold-fill" aria-hidden="true"></span>
+              <span>{holding ? "NON LASCIARE \u2014 ATTIVAZIONE IN CORSO" : phase === "requesting" ? "ATTENDO CONFERMA DA COLD TURKEY..." : phase === "error" ? "RIPROVA: TIENI PREMUTO 2 SECONDI" : "TIENI PREMUTO STOP PER 2 SECONDI"}</span>
+            </button>
+            <div style={{fontSize:10,color:C.sub,textAlign:"center",lineHeight:1.5,marginTop:9}}>Rilascio anticipato = nessuna richiesta.</div>
+          </>
+        )}
+        <div aria-live="assertive">
+          {phase === "requesting" && <div role="status" style={{marginTop:18,color:C.gold,fontSize:12,lineHeight:1.6}}>Richiesta inviata. Il messaggio di blocco apparira solo dopo la conferma verificata di Cold Turkey.</div>}
+          {phase === "error" && <div role="alert" style={{marginTop:18,padding:"16px",border:"2px solid "+C.red,borderRadius:6,background:C.redBg,color:C.red,fontSize:15,fontWeight:700,lineHeight:1.5}}>{TRADING_GUARD_FAILURE}</div>}
+          {phase === "success" && result && (
+            <div role="status" className="trading-guard-success" style={{padding:"22px 18px",border:"2px solid "+C.green,borderRadius:8,background:C.greenBg,textAlign:"center"}}>
+              <div style={{fontSize:11,color:C.green,fontWeight:700,letterSpacing:"0.15em",marginBottom:11}}>{"NY "+result.session+" SESSION \u00B7 COLD TURKEY "+result.status.toUpperCase()}</div>
+              <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:34,fontWeight:700,lineHeight:1.08,color:C.text}}>TRADINGVIEW BLOCCATO FINO ALLE {result.cutoffLabel}</div>
+              <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:27,fontWeight:700,lineHeight:1.2,color:C.gold,marginTop:18}}>{result.instruction}</div>
+              <button type="button" onClick={onClose} style={{marginTop:22,padding:"9px 20px",border:"1px solid "+C.border,borderRadius:4,background:"transparent",color:C.sub,fontFamily:"inherit",fontSize:10,cursor:"pointer",letterSpacing:"0.1em"}}>CHIUDI</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+function PatternInterruptView({onStop}) {
+  const rules = ["NY AM SESSION: 2 LOSS = STOP","NY PM SESSION: 2 LOSS = STOP","NY DAILY LIMIT: 3 LOSS = STOP"];
+  return (
+    <section aria-labelledby="pattern-interrupt-title" style={{maxWidth:1050,margin:"0 auto",paddingBottom:90}}>
+      <div style={{textAlign:"center",marginBottom:12}}>
+        <div style={{fontSize:10,color:C.red,fontWeight:700,letterSpacing:"0.18em",marginBottom:8}}>TRADING GUARD</div>
+        <h1 id="pattern-interrupt-title" style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:42,lineHeight:1,color:C.text}}>PATTERN INTERRUPT</h1>
+      </div>
+      <div className="pattern-interrupt-rules">
+        {rules.map(function(rule){return <div key={rule} className="pattern-interrupt-rule">{rule}</div>;})}
+      </div>
+      <div className="pattern-interrupt-flow">{"FLAT \u2192 CANCEL ALL \u2192 VERIFY \u2192 STOP \u2192 BIKE"}</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:14,marginTop:22}}>
+        <div style={{padding:20,border:"1px solid "+C.gold+"50",borderRadius:8,background:C.gold+"0A"}}>
+          <div style={{fontSize:10,color:C.gold,fontWeight:700,letterSpacing:"0.15em",marginBottom:8}}>BIKE RESET</div>
+          <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:34,fontWeight:700,color:C.text}}>10 MINUTI</div>
+          <div style={{fontSize:11,color:C.sub,lineHeight:1.6,marginTop:8}}>Dopo il blocco: alzati dalla postazione e interrompi fisicamente il pattern.</div>
+        </div>
+        <div style={{padding:20,border:"1px solid "+C.border,borderRadius:8,background:C.card}}>
+          <div style={{fontSize:10,color:C.sub,fontWeight:700,letterSpacing:"0.15em",marginBottom:8}}>CONFINE DI SICUREZZA</div>
+          <div style={{fontSize:11,color:C.text,lineHeight:1.65}}>Questa sezione non legge ne modifica i trade del Journal. Trading Guard non puo controllare se sei flat e non puo intervenire sugli ordini.</div>
+        </div>
+      </div>
+      <div style={{textAlign:"center",marginTop:25}}>
+        <button type="button" onClick={onStop} style={{minWidth:220,minHeight:56,padding:"12px 25px",border:"2px solid "+C.red,borderRadius:7,background:C.red,color:"#FFFFFF",fontFamily:"'Barlow Condensed',sans-serif",fontSize:22,fontWeight:700,letterSpacing:"0.1em",cursor:"pointer"}}>APRI STOP ROSSO</button>
+      </div>
+    </section>
+  );
+}
+
 // MAIN APP
 function Journal() {
   const [tab,          setTab]          = useState("dashboard");
@@ -3678,6 +3920,7 @@ function Journal() {
   const [showExport,   setShowExport]   = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showTWImport, setShowTWImport] = useState(false);
+  const [showTradingGuard, setShowTradingGuard] = useState(false);
   const [initialStopDate, setInitialStopDate] = useState(null);
   const [loadError, setLoadError] = useState("");
   const [loadWarning, setLoadWarning] = useState("");
@@ -3783,18 +4026,24 @@ function Journal() {
     setTab("calendario");
   }
   function toggleR(){ setShowOnlyR(function(v){return !v;}); }
-  const TABS = [{k:"dashboard",l:"DASHBOARD"},{k:"calendario",l:"CALENDARIO"},{k:"settimanale",l:"SETTIMANALE"},{k:"playbook",l:"PLAYBOOK"},{k:"execution",l:"EXECUTION"},{k:"mindset",l:"CHAMPION MINDSET"}];
+  const TABS = [{k:"dashboard",l:"DASHBOARD"},{k:"calendario",l:"CALENDARIO"},{k:"settimanale",l:"SETTIMANALE"},{k:"playbook",l:"PLAYBOOK"},{k:"execution",l:"EXECUTION"},{k:"mindset",l:"CHAMPION MINDSET"},{k:"pattern",l:"PATTERN INTERRUPT"}];
   if (loading) return (
-    <div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:C.sub,fontFamily:"'IBM Plex Mono',monospace",fontSize:12}}>
-      Caricamento...
-    </div>
+    <>
+      <TradingGuardStopButton onOpen={function(){setShowTradingGuard(true);}}/>
+      {showTradingGuard && <TradingGuardEmergencyModal onClose={function(){setShowTradingGuard(false);}}/>}
+      <div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:C.sub,fontFamily:"'IBM Plex Mono',monospace",fontSize:12}}>Caricamento...</div>
+    </>
   );
   if (loadError) return (
-    <div style={{padding:24,color:C.red,fontFamily:"monospace",lineHeight:1.6}}>
-      <div role="alert">{loadError}</div>
-      <button onClick={function(){setShowSettings(true);}} style={{marginTop:16,padding:10}}>IMPOSTAZIONI</button>
-      {showSettings && <SettingsModal rv={rv} onSave={saveSettings} onClose={function(){setShowSettings(false);}}/>}
-    </div>
+    <>
+      <TradingGuardStopButton onOpen={function(){setShowTradingGuard(true);}}/>
+      {showTradingGuard && <TradingGuardEmergencyModal onClose={function(){setShowTradingGuard(false);}}/>}
+      <div style={{padding:24,color:C.red,fontFamily:"monospace",lineHeight:1.6}}>
+        <div role="alert">{loadError}</div>
+        <button onClick={function(){setShowSettings(true);}} style={{marginTop:16,padding:10}}>IMPOSTAZIONI</button>
+        {showSettings && <SettingsModal rv={rv} onSave={saveSettings} onClose={function(){setShowSettings(false);}}/>}
+      </div>
+    </>
   );
   return (
     <div style={{fontFamily:"'IBM Plex Mono','Courier New',monospace",fontSize:13,background:C.bg,minHeight:"100vh",color:C.text,padding:"20px 22px",boxSizing:"border-box"}}>
@@ -3804,6 +4053,8 @@ function Journal() {
       {showExport    && <ExportModal   trades={trades} rv={rv}                        onClose={function(){setShowExport(false);}}/>}
       {showSettings  && <SettingsModal rv={rv}         onSave={saveSettings}          onClose={function(){setShowSettings(false);}}/>}
       {showTWImport  && <TWImportModal onClose={function(){setShowTWImport(false);}}  onSave={saveTWOhlc} existing={ohlcMeta} trades={trades}/>}
+      <TradingGuardStopButton onOpen={function(){setShowTradingGuard(true);}}/>
+      {showTradingGuard && <TradingGuardEmergencyModal onClose={function(){setShowTradingGuard(false);}}/>}
       <div className="journal-header">
         <div className="journal-identity">
           <div className="journal-name-row">
@@ -3836,6 +4087,7 @@ function Journal() {
       {tab==="playbook"    && <WeeklyPlaybookView/>}
       {tab==="execution"   && <ExecutionReviewView trades={trades} onOpenInitialStop={openInitialStopForTrade}/>}
       {tab==="mindset"     && <ChampionMindsetView/>}
+      {tab==="pattern"     && <PatternInterruptView onStop={function(){setShowTradingGuard(true);}}/>}
     </div>
   );
 }

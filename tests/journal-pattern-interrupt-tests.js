@@ -62,9 +62,30 @@ async function main() {
     for(const exact of [
       "NY AM SESSION: 2 LOSS = STOP","NY PM SESSION: 2 LOSS = STOP","NY DAILY LIMIT: 3 LOSS = STOP",
       "FLAT \u2192 CANCEL ALL \u2192 VERIFY \u2192 STOP \u2192 BIKE","BIKE RESET","10 MINUTI",
-      "Questa sezione non legge ne modifica i trade del Journal."
+      "Questa sezione non legge ne modifica i trade del Journal.","VERIFICA PONTE",
+      "Controllo sicuro: non attiva alcun blocco."
     ]) assert.ok(text(pattern.tree).includes(exact),exact);
     assert.equal(e.target.writes,0);
+  });
+  await test("The bridge check is an explicit read-only health request",async function(){
+    const e=environment(),calls=[];
+    e.context.fetch=async function(url,options){calls.push({url,options});return{ok:true,json:async function(){return{
+      ok:true,ready:true,code:"ready",service:"Trading Guard Local",timezone:"America/New_York",listenAddress:"127.0.0.1"
+    };}};};
+    const view=e.mount("PatternInterruptView",{onStop:function(){}}); await view.flush();
+    button(view,"VERIFICA PONTE").props.onClick(); await view.flush();
+    assert.equal(calls.length,1);
+    assert.equal(calls[0].url,"http://127.0.0.1:48173/v1/health");
+    assert.equal(calls[0].options.method,"GET");
+    assert.equal(e.target.writes,0);
+    assert.ok(text(view.tree).includes("PONTE PRONTO \u2014 COLD TURKEY DISPONIBILE."));
+  });
+  await test("The bridge check fails closed on an unverified health response",async function(){
+    const e=environment();
+    e.context.fetch=async function(){return{ok:true,json:async function(){return{ok:true,ready:false,code:"cold_turkey_ui_running"};}};};
+    const view=e.mount("PatternInterruptView",{onStop:function(){}}); await view.flush();
+    button(view,"VERIFICA PONTE").props.onClick(); await view.flush();
+    assert.ok(text(view.tree).includes("PONTE NON PRONTO \u2014 AVVIA TRADING GUARD LOCAL."));
   });
   await test("Opening STOP requires both exact manual confirmations",async function(){
     const e=environment(),view=e.mount("TradingGuardEmergencyModal",{onClose:function(){}}); await view.flush();
@@ -209,9 +230,10 @@ async function main() {
     assert.match(c.createTradingGuardRequestId(deterministic),/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     assert.throws(function(){c.createTradingGuardRequestId({});},/UUID sicuro/);
   });
-  await test("Guard implementation has one stop endpoint, a twenty-second timeout and no persistence or OFF API",function(){
+  await test("Guard implementation exposes only STOP plus read-only health, with no persistence or OFF API",function(){
     const guard=html.slice(html.indexOf("// PATTERN INTERRUPT / TRADING GUARD"),html.indexOf("// MAIN APP"));
     assert.ok(guard.includes('http://127.0.0.1:48173/v1/stop'));
+    assert.ok(guard.includes('http://127.0.0.1:48173/v1/health'));
     assert.ok(guard.includes("TRADING_GUARD_TIMEOUT_MS = 20000"));
     assert.ok(!guard.includes("localStorage"));
     assert.ok(!guard.includes("storage.get"));

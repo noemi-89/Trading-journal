@@ -32,6 +32,8 @@ Il Journal non conta le Loss e non decide al posto dell'utente se una regola è 
 
 ## Procedura manuale STOP
 
+Prima della sessione, aprire `PATTERN INTERRUPT` e premere `VERIFICA PONTE`. È un controllo `GET /health` in sola lettura: non attiva alcun blocco. Il risultato atteso è `PONTE PRONTO — COLD TURKEY DISPONIBILE.`. Su Chrome 142+ questa è anche l'occasione corretta per concedere una sola volta il permesso Local Network Access, invece di incontrare la richiesta durante il tilt.
+
 Sequenza obbligatoria:
 
 ```text
@@ -219,7 +221,7 @@ Questo collaudo dimostra timer, resistenza allo stop anticipato e riapertura. No
 
 ### 3. Controllo browser → ponte
 
-Con il ponte attivo, aprire il Journal in Chrome e verificare che il browser consenta la rete locale quando richiesto. Il solo `GET /health` è non mutante. Il pulsante rosso invece attiva realmente il blocco pertinente: non usarlo come test casuale.
+Con il ponte attivo, aprire il Journal in Chrome, entrare in `PATTERN INTERRUPT` e premere `VERIFICA PONTE`. Consentire la rete locale quando Chrome lo richiede. Il controllo usa soltanto `GET /health` ed è non mutante; il pulsante rosso invece attiva realmente il blocco pertinente e non va usato come test casuale.
 
 ### 4. Unico test reale TradingView
 

@@ -60,6 +60,7 @@
     .pattern-interrupt-rules { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; margin: 24px 0; }
     .pattern-interrupt-rule { min-width: 0; padding: 18px 16px; border: 1px solid #E8454560; border-radius: 8px; background: #E845450D; color: #FFFFFF; font: 700 22px/1.18 'Barlow Condensed',sans-serif; text-align: center; overflow-wrap: anywhere; }
     .pattern-interrupt-flow { padding: 22px 16px; border-top: 1px solid #383848; border-bottom: 1px solid #383848; color: #F5A020; font: 700 30px/1.25 'Barlow Condensed',sans-serif; text-align: center; letter-spacing: 0.035em; overflow-wrap: anywhere; }
+    .pattern-interrupt-actions { display: flex; justify-content: center; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 25px; }
     @media (max-width: 760px) {
       .journal-header { grid-template-columns: minmax(0,1fr) auto; gap: 22px 16px; }
       .journal-settings { grid-column: 2; grid-row: 1; }
@@ -3684,12 +3685,14 @@ function SettingsModal({rv, onSave, onClose}) {
 // PATTERN INTERRUPT / TRADING GUARD
 // This feature deliberately has no storage access and no broker/trade dependency.
 const TRADING_GUARD_ENDPOINT = "http://127.0.0.1:48173/v1/stop";
+const TRADING_GUARD_HEALTH_ENDPOINT = "http://127.0.0.1:48173/v1/health";
 const TRADING_GUARD_INTENT = "stop-after-flat-confirmation";
 const TRADING_GUARD_HOLD_MS = 2000;
 // A real Cold Turkey start plus the verified status read can take over nine seconds.
 // Keep the UI conservative: wait long enough for verification instead of showing a false failure.
 const TRADING_GUARD_TIMEOUT_MS = 20000;
 const TRADING_GUARD_FAILURE = "BLOCCO NON CONFERMATO \u2014 APRI COLD TURKEY ORA.";
+const TRADING_GUARD_HEALTH_FAILURE = "PONTE NON PRONTO \u2014 AVVIA TRADING GUARD LOCAL.";
 function isTradingGuardUuid(value) {
   return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
@@ -3752,6 +3755,25 @@ async function requestTradingGuardStop(requestId) {
     const verified = validateTradingGuardResponse(await response.json(),requestId);
     if (!verified) throw new Error("Conferma Cold Turkey non valida.");
     return verified;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+async function requestTradingGuardHealth() {
+  if (typeof fetch !== "function") throw new Error("Servizio locale non raggiungibile.");
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timeout = setTimeout(function(){if(controller)controller.abort();},8000);
+  try {
+    const response = await fetch(TRADING_GUARD_HEALTH_ENDPOINT,{
+      method:"GET", mode:"cors", cache:"no-store", credentials:"omit",
+      signal:controller ? controller.signal : undefined,
+    });
+    if (!response || response.ok !== true) throw new Error("Health HTTP non valida.");
+    const payload = await response.json();
+    if (!payload || payload.ok !== true || payload.ready !== true || payload.code !== "ready" ||
+        payload.service !== "Trading Guard Local" || payload.timezone !== "America/New_York" ||
+        payload.listenAddress !== "127.0.0.1") throw new Error("Health non verificata.");
+    return true;
   } finally {
     clearTimeout(timeout);
   }
@@ -3877,6 +3899,13 @@ function TradingGuardEmergencyModal({onClose}) {
 }
 function PatternInterruptView({onStop}) {
   const rules = ["NY AM SESSION: 2 LOSS = STOP","NY PM SESSION: 2 LOSS = STOP","NY DAILY LIMIT: 3 LOSS = STOP"];
+  const [bridgePhase,setBridgePhase] = useState("idle");
+  async function checkBridge() {
+    if (bridgePhase === "checking") return;
+    setBridgePhase("checking");
+    try { await requestTradingGuardHealth(); setBridgePhase("ready"); }
+    catch(error) { setBridgePhase("error"); }
+  }
   return (
     <section aria-labelledby="pattern-interrupt-title" style={{maxWidth:1050,margin:"0 auto",paddingBottom:90}}>
       <div style={{textAlign:"center",marginBottom:12}}>
@@ -3898,8 +3927,10 @@ function PatternInterruptView({onStop}) {
           <div style={{fontSize:11,color:C.text,lineHeight:1.65}}>Questa sezione non legge ne modifica i trade del Journal. Trading Guard non puo controllare se sei flat e non puo intervenire sugli ordini.</div>
         </div>
       </div>
-      <div style={{textAlign:"center",marginTop:25}}>
+      <div className="pattern-interrupt-actions">
+        <button type="button" onClick={checkBridge} disabled={bridgePhase === "checking"} style={{minWidth:220,minHeight:46,padding:"10px 22px",border:"1px solid "+C.border,borderRadius:7,background:C.card,color:C.sub,fontFamily:"'Barlow Condensed',sans-serif",fontSize:17,fontWeight:700,letterSpacing:"0.08em",cursor:bridgePhase === "checking"?"wait":"pointer"}}>{bridgePhase === "checking"?"CONTROLLO PONTE...":"VERIFICA PONTE"}</button>
         <button type="button" onClick={onStop} style={{minWidth:220,minHeight:56,padding:"12px 25px",border:"2px solid "+C.red,borderRadius:7,background:C.red,color:"#FFFFFF",fontFamily:"'Barlow Condensed',sans-serif",fontSize:22,fontWeight:700,letterSpacing:"0.1em",cursor:"pointer"}}>APRI STOP ROSSO</button>
+        <div aria-live="polite" style={{flexBasis:"100%",minHeight:22,fontSize:11,fontWeight:700,lineHeight:1.5,textAlign:"center",color:bridgePhase === "ready"?C.green:bridgePhase === "error"?C.red:C.sub}}>{bridgePhase === "ready"?"PONTE PRONTO \u2014 COLD TURKEY DISPONIBILE.":bridgePhase === "error"?TRADING_GUARD_HEALTH_FAILURE:"Controllo sicuro: non attiva alcun blocco."}</div>
       </div>
     </section>
   );

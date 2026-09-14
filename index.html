@@ -57,14 +57,14 @@
     .trading-guard-hold:disabled { border-color: #383848; background: #16161B; color: #616B82; cursor: not-allowed; }
     .trading-guard-hold-fill { position: absolute; inset: 0 auto 0 0; z-index: -1; width: 0; background: #B91C1C; }
     .trading-guard-hold.is-holding .trading-guard-hold-fill { width: 100%; transition: width 2s linear; }
-    .pattern-interrupt-layout { display: grid; grid-template-columns: minmax(220px,280px) minmax(0,1fr); gap: 26px; align-items: start; margin-top: 18px; }
+    .pattern-interrupt-layout { display: grid; grid-template-columns: clamp(170px,22vw,280px) minmax(0,1fr) clamp(170px,22vw,280px); gap: clamp(16px,2vw,26px); align-items: start; margin-top: 18px; }
     .pattern-interrupt-rules { display: grid; grid-template-columns: minmax(0,1fr); gap: 12px; margin: 0; }
     .pattern-interrupt-rule { min-width: 0; padding: 18px 16px; border: 1px solid #E8454560; border-radius: 8px; background: #E845450D; color: #FFFFFF; font: 700 22px/1.18 'Barlow Condensed',sans-serif; text-align: center; overflow-wrap: anywhere; }
     .pattern-interrupt-main { min-width: 0; }
     .pattern-interrupt-flow { padding: 22px 16px; border-top: 1px solid #383848; border-bottom: 1px solid #383848; color: #F5A020; font: 700 30px/1.25 'Barlow Condensed',sans-serif; text-align: center; letter-spacing: 0.035em; overflow-wrap: anywhere; }
     .pattern-interrupt-bike { width: min(100%,520px); margin: 18px auto 0; padding: 20px; border: 1px solid #F5A02050; border-radius: 8px; background: #F5A0200A; text-align: center; }
     .pattern-interrupt-actions { display: flex; justify-content: center; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
-    .pattern-interrupt-quote { margin: 16px auto 0; color: #FFFFFF; font: 700 24px/1.3 'Barlow Condensed',sans-serif; text-align: center; letter-spacing: 0.035em; }
+    .pattern-interrupt-quote { margin: 18px auto 0; color: #FFFFFF; font: 700 32px/1.25 'Barlow Condensed',sans-serif; text-align: center; letter-spacing: 0.035em; }
     .pattern-interrupt-quote span { display: block; }
     @media (max-width: 760px) {
       .journal-header { grid-template-columns: minmax(0,1fr) auto; gap: 22px 16px; }
@@ -80,7 +80,7 @@
       .pattern-interrupt-layout { grid-template-columns: minmax(0,1fr); gap: 18px; }
       .pattern-interrupt-flow { font-size: 24px; }
       .pattern-interrupt-bike { width: 100%; }
-      .pattern-interrupt-quote { font-size: 22px; }
+      .pattern-interrupt-quote { font-size: 26px; }
     }
     @media (prefers-reduced-motion: reduce) {
       .mindset-statement { transition: none; }
@@ -3914,7 +3914,7 @@ function PatternInterruptView({onStop}) {
     catch(error) { setBridgePhase("error"); }
   }
   return (
-    <section aria-labelledby="pattern-interrupt-title" style={{maxWidth:1050,margin:"0 auto",paddingBottom:90}}>
+    <section aria-labelledby="pattern-interrupt-title" style={{maxWidth:1240,margin:"0 auto",paddingBottom:90}}>
       <div style={{textAlign:"center",marginBottom:12}}>
         <div style={{fontSize:10,color:C.red,fontWeight:700,letterSpacing:"0.18em",marginBottom:8}}>TRADING GUARD</div>
         <h1 id="pattern-interrupt-title" style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:42,lineHeight:1,color:C.text}}>PATTERN INTERRUPT</h1>

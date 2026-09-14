@@ -54,17 +54,23 @@ async function main() {
     assert.ok(text(failedView.tree).includes("Lettura del journal non riuscita"));
     find(failedView,function(n){return n.type===failed.context.TradingGuardStopButton;});
   });
-  await test("The dedicated tab contains the exact rules, safety flow and ten-minute reset",async function(){
+  await test("The dedicated tab contains the exact rules, flow, reset and walk-away message",async function(){
     const e=environment(),view=e.mount("Journal"); await view.flush();
     button(view,"PATTERN INTERRUPT").props.onClick(); await view.flush();
     find(view,function(n){return n.type===e.context.PatternInterruptView;});
-    const pattern=e.mount("PatternInterruptView",{onStop:function(){}});
+    let stopOpened=0;
+    const pattern=e.mount("PatternInterruptView",{onStop:function(){stopOpened++;}});
     for(const exact of [
       "NY AM SESSION: 2 LOSS = STOP","NY PM SESSION: 2 LOSS = STOP","NY DAILY LIMIT: 3 LOSS = STOP",
       "FLAT \u2192 CANCEL ALL \u2192 VERIFY \u2192 STOP \u2192 BIKE","BIKE RESET","10 MINUTI",
-      "Questa sezione non legge ne modifica i trade del Journal.","VERIFICA PONTE",
+      "WALK AWAY. THE NEXT OPPORTUNITY WILL COME.","TOMORROW IS ANOTHER DAY.","VERIFICA PONTE",
       "Controllo sicuro: non attiva alcun blocco."
     ]) assert.ok(text(pattern.tree).includes(exact),exact);
+    assert.equal(nodes(pattern.tree).filter(function(node){return node.props&&node.props.className==="pattern-interrupt-rule";}).length,3);
+    assert.ok(!text(pattern.tree).includes("CONFINE DI SICUREZZA"));
+    assert.ok(!text(pattern.tree).includes("APRI STOP ROSSO"));
+    button(pattern,"STOP").props.onClick();
+    assert.equal(stopOpened,1);
     assert.equal(e.target.writes,0);
   });
   await test("The bridge check is an explicit read-only health request",async function(){

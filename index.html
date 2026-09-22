@@ -17,6 +17,19 @@
     .execution-impact-panel { position: sticky; top: 12px; }
     .dashboard-metrics { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); }
     .dashboard-pair { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
+    .risk-chart-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+    .risk-chart-controls { display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
+    .risk-view-toggle { display: inline-flex; align-items: center; padding: 2px; border: 1px solid #2C2C3A; border-radius: 6px; background: #0F0F13; }
+    .risk-view-toggle button { min-height: 28px; padding: 5px 10px; border: 0; border-radius: 4px; background: transparent; color: #8A96B0; font: 700 10px 'IBM Plex Mono',monospace; letter-spacing: 0.08em; cursor: pointer; }
+    .risk-view-toggle button[aria-pressed="true"] { background: #24242E; color: #EDE8DC; }
+    .prop-limit-control { display: flex; align-items: center; gap: 9px; min-height: 34px; }
+    .prop-limit-switch { display: inline-flex; align-items: center; gap: 7px; color: #8A96B0; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; cursor: pointer; white-space: nowrap; }
+    .prop-limit-switch input { width: 17px; height: 17px; accent-color: #F5A020; }
+    .prop-limit-input { width: 66px; min-height: 30px; padding: 5px 7px; border: 1px solid #F5A02070; border-radius: 4px; background: #16161B; color: #F5A020; font: 700 11px 'IBM Plex Mono',monospace; text-align: right; outline: none; }
+    .monte-carlo-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
+    .monte-carlo-toolbar-group { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .monte-carlo-grid { display: grid; grid-template-columns: minmax(0,1.65fr) minmax(270px,0.75fr); gap: 14px; align-items: stretch; }
+    .monte-carlo-note { border-left: 2px solid #5A8FE8; padding-left: 12px; color: #8A96B0; font-size: 10px; line-height: 1.6; }
     .metric-card { min-width: 0; overflow-wrap: anywhere; }
     .journal-header { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 28px; margin-bottom: 22px; padding-bottom: 18px; border-bottom: 1px solid #242430; }
     .journal-identity { min-width: 0; }
@@ -81,6 +94,7 @@
       .pattern-interrupt-flow { font-size: 24px; }
       .pattern-interrupt-bike { width: 100%; }
       .pattern-interrupt-quote { font-size: 26px; }
+      .monte-carlo-grid { grid-template-columns: minmax(0,1fr); }
     }
     @media (prefers-reduced-motion: reduce) {
       .mindset-statement { transition: none; }
@@ -88,6 +102,8 @@
     @media (max-width: 600px) {
       .dashboard-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
       .dashboard-pair { grid-template-columns: minmax(0,1fr); }
+      .risk-chart-controls { justify-content: flex-start; width: 100%; }
+      .prop-limit-control { flex-wrap: wrap; }
     }
     @media (max-width: 900px) {
       .execution-content-grid { grid-template-columns: minmax(0, 1fr); }
@@ -98,7 +114,7 @@
 <body>
   <div id="root"></div>
   <script type="text/babel">
-    const { useState, useEffect, useRef } = React;
+    const { useState, useEffect, useRef, useMemo } = React;
 
     // localStorage shim - persistent browser storage
     const storage = {
@@ -147,6 +163,11 @@ function writeJournalEntries(target, entries) {
 function validRValue(value) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0;
+}
+
+function validPropLimitValue(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0.25 && n <= 100;
 }
 
 function useWeeklyDocument(key, emptyData) {
@@ -199,6 +220,9 @@ const C = {
   blue:"#5A8FE8", purple:"#9878D8",
 };
 const R_DEFAULT  = 250;
+const PROP_LIMIT_DEFAULT_R = 4;
+const MONTE_CARLO_SIMULATIONS = 10000;
+const MONTE_CARLO_DEFAULT_SEED = 314159265;
 const MONTHS_IT  = ["Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno","Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre"];
 const DAYS_IT    = ["LUN","MAR","MER","GIO","VEN"];
 const DOW_IT     = ["DOM","LUN","MAR","MER","GIO","VEN","SAB"];
@@ -419,6 +443,7 @@ function journalBackupFilename(now) {
 function fmtR(r)         { if (r == null || isNaN(r)) return "-"; return (r >= 0 ? "+" : "") + r.toFixed(2) + "R"; }
 function fmtD(d)         { if (d == null || isNaN(d)) return "-"; return (d >= 0 ? "+" : "-") + "$" + Math.abs(Math.round(d)).toLocaleString("en-US"); }
 function fmtDur(m)       { if (m == null) return "-"; if (m < 60) return Math.round(m) + "m"; return Math.floor(m / 60) + "h " + Math.round(m % 60) + "m"; }
+function fmtProbability(value) { if (value == null || !isFinite(value)) return "-"; const pct=value*100; return pct.toFixed(pct>0&&pct<10?1:0)+"%"; }
 function getDow(ds)      { if (!ds) return "?"; return DOW_IT[new Date(ds + "T12:00:00").getDay()] || "?"; }
 function getISOWeekInfo(date) {
   const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -1597,6 +1622,209 @@ function calcStats(trades, rv) {
     avgDurL: lDur.length ? lDur.reduce(function(s,t){return s+Number(t.duration);},0)/lDur.length : null,
   };
 }
+
+function calcRiskSeries(trades, rv) {
+  if (!validRValue(rv)) return null;
+  const closed = sortTradesChronologically((trades || []).filter(function(t){
+    return getTradeResult(t) !== "Open" && Number.isFinite(Number(t && t.pnl_dollars));
+  }));
+  if (!closed.length) return null;
+  const points = [{index:0,equity:0,drawdown:0,date:"",trade:null}];
+  let equity = 0;
+  let peak = 0;
+  let peakIndex = 0;
+  let maxDrawdown = 0;
+  let maxDrawdownIndex = 0;
+  let maxDrawdownPeakIndex = 0;
+  let underwaterTrades = 0;
+  let longestUnderwaterTrades = 0;
+  closed.forEach(function(trade, index){
+    equity += calcR(Number(trade.pnl_dollars), rv);
+    if (equity > peak) { peak = equity; peakIndex = index + 1; }
+    const drawdown = Math.max(0, peak - equity);
+    if (drawdown > 0.000000001) {
+      underwaterTrades++;
+      if (underwaterTrades > longestUnderwaterTrades) longestUnderwaterTrades = underwaterTrades;
+    } else {
+      underwaterTrades = 0;
+    }
+    if (drawdown > maxDrawdown) {
+      maxDrawdown = drawdown;
+      maxDrawdownIndex = index + 1;
+      maxDrawdownPeakIndex = peakIndex;
+    }
+    points.push({index:index+1,equity:equity,drawdown:drawdown,date:trade.date||"",trade:trade});
+  });
+  return {
+    points:points,
+    closedCount:closed.length,
+    totalR:equity,
+    currentDrawdown:points[points.length-1].drawdown,
+    maxDrawdown:maxDrawdown,
+    maxDrawdownIndex:maxDrawdownIndex,
+    maxDrawdownPeakIndex:maxDrawdownPeakIndex,
+    maxDrawdownDate:points[maxDrawdownIndex] ? points[maxDrawdownIndex].date : "",
+    longestUnderwaterTrades:longestUnderwaterTrades,
+  };
+}
+
+function buildMonteCarloSample(trades, rv) {
+  const byDate = {};
+  const seenIds = {};
+  let tradeCount = 0;
+  let duplicateIds = 0;
+  let invalidRows = 0;
+  let partialRows = 0;
+  let beTrades = 0;
+  sortTradesChronologically(trades || []).forEach(function(trade){
+    if (getTradeResult(trade) === "Open") return;
+    const id = String(trade && trade.id || "");
+    if (id && seenIds[id]) { duplicateIds++; return; }
+    if (id) seenIds[id] = true;
+    const pnl = Number(trade && trade.pnl_dollars);
+    const date = String(trade && trade.date || "");
+    if (!date || !Number.isFinite(pnl) || !validRValue(rv)) { invalidRows++; return; }
+    if (!byDate[date]) byDate[date] = {date:date,r:0,dollars:0,tradeCount:0,returns:[]};
+    byDate[date].dollars += pnl;
+    const tradeR = calcR(pnl,rv);
+    byDate[date].r += tradeR;
+    byDate[date].returns.push(tradeR);
+    byDate[date].tradeCount++;
+    tradeCount++;
+    if (trade.partial) partialRows++;
+    if (getTradeResult(trade) === "BE") beTrades++;
+  });
+  const blocks = Object.keys(byDate).sort().map(function(date){ return byDate[date]; });
+  return {
+    blocks:blocks,
+    dayCount:blocks.length,
+    tradeCount:tradeCount,
+    duplicateIds:duplicateIds,
+    invalidRows:invalidRows,
+    partialRows:partialRows,
+    beTrades:beTrades,
+  };
+}
+
+function seededRandom(seed) {
+  let state = (Number(seed) >>> 0) || MONTE_CARLO_DEFAULT_SEED;
+  return function(){
+    state = (state + 0x6D2B79F5) >>> 0;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function runMonteCarlo(dayBlocks, horizon, simulationCount, seed, propLimitR) {
+  const blocks = (dayBlocks || []).filter(function(block){ return block && Number.isFinite(Number(block.r)); });
+  const steps = Math.max(1, Math.floor(Number(horizon) || 0));
+  const count = Math.max(1, Math.floor(Number(simulationCount) || 0));
+  if (!blocks.length) return null;
+  const limit = validPropLimitValue(propLimitR) ? Number(propLimitR) : null;
+  const random = seededRandom(seed);
+  const valuesByStep = Array.from({length:steps+1},function(){ return new Array(count); });
+  const maxDrawdowns = new Array(count);
+  const maxLossStreaks = new Array(count);
+  const maxUnderwaterDays = new Array(count);
+  let positiveCount = 0;
+  let breachCount = 0;
+  for (let simulation = 0; simulation < count; simulation++) {
+    let cumulative = 0;
+    let peak = 0;
+    let maxDrawdown = 0;
+    let lossStreak = 0;
+    let maxLossStreak = 0;
+    let underwaterDays = 0;
+    let longestUnderwaterDays = 0;
+    let breached = false;
+    valuesByStep[0][simulation] = 0;
+    for (let step = 1; step <= steps; step++) {
+      const block = blocks[Math.min(blocks.length-1,Math.floor(random()*blocks.length))];
+      const dailyR = Number(block.r);
+      const intradayReturns = Array.isArray(block.returns) && block.returns.length ? block.returns : [dailyR];
+      intradayReturns.forEach(function(tradeR){
+        cumulative += Number(tradeR);
+        if (cumulative > peak) peak = cumulative;
+        const intradayDrawdown = Math.max(0, peak - cumulative);
+        if (intradayDrawdown > maxDrawdown) maxDrawdown = intradayDrawdown;
+        if (limit != null && intradayDrawdown >= limit) breached = true;
+      });
+      const endOfDayDrawdown = Math.max(0, peak - cumulative);
+      if (endOfDayDrawdown > 0.000000001) {
+        underwaterDays++;
+        if (underwaterDays > longestUnderwaterDays) longestUnderwaterDays = underwaterDays;
+      } else {
+        underwaterDays = 0;
+      }
+      if (dailyR < 0) {
+        lossStreak++;
+        if (lossStreak > maxLossStreak) maxLossStreak = lossStreak;
+      } else {
+        lossStreak = 0;
+      }
+      valuesByStep[step][simulation] = cumulative;
+    }
+    if (cumulative > 0) positiveCount++;
+    if (breached) breachCount++;
+    maxDrawdowns[simulation] = maxDrawdown;
+    maxLossStreaks[simulation] = maxLossStreak;
+    maxUnderwaterDays[simulation] = longestUnderwaterDays;
+  }
+  const bands = valuesByStep.map(function(values, step){
+    values.sort(function(a,b){ return a-b; });
+    return {
+      step:step,
+      p05:percentile(values,0.05),
+      p25:percentile(values,0.25),
+      p50:percentile(values,0.50),
+      p75:percentile(values,0.75),
+      p95:percentile(values,0.95),
+    };
+  });
+  maxDrawdowns.sort(function(a,b){ return a-b; });
+  maxLossStreaks.sort(function(a,b){ return a-b; });
+  maxUnderwaterDays.sort(function(a,b){ return a-b; });
+  const finalValues = valuesByStep[steps];
+  return {
+    simulationCount:count,
+    horizon:steps,
+    seed:Number(seed) >>> 0,
+    bands:bands,
+    finalP05:percentile(finalValues,0.05),
+    finalMedian:percentile(finalValues,0.50),
+    finalP95:percentile(finalValues,0.95),
+    positiveProbability:positiveCount/count,
+    maxDrawdownMedian:percentile(maxDrawdowns,0.50),
+    maxDrawdownP95:percentile(maxDrawdowns,0.95),
+    maxLossStreakMedian:percentile(maxLossStreaks,0.50),
+    maxLossStreakP95:percentile(maxLossStreaks,0.95),
+    maxUnderwaterMedian:percentile(maxUnderwaterDays,0.50),
+    maxUnderwaterP95:percentile(maxUnderwaterDays,0.95),
+    propBreachProbability:limit == null ? null : breachCount/count,
+    maxDrawdowns:maxDrawdowns,
+  };
+}
+
+function buildHistogram(values, binCount) {
+  const clean = (values || []).filter(function(value){ return Number.isFinite(Number(value)) && Number(value) >= 0; }).map(Number);
+  if (!clean.length) return [];
+  const count = Math.max(1,Math.floor(Number(binCount)||1));
+  const maxValue = Math.max.apply(null,clean);
+  const ceiling = Math.max(0.25,Math.ceil(maxValue*4)/4);
+  const width = ceiling/count;
+  const bins = Array.from({length:count},function(_,index){
+    return {min:index*width,max:(index+1)*width,count:0,pct:0};
+  });
+  clean.forEach(function(value){
+    const index = Math.min(count-1,Math.floor(value/width));
+    bins[index].count++;
+  });
+  bins.forEach(function(bin){ bin.pct = bin.count/clean.length; });
+  return bins;
+}
+
 function calcPerformanceExtremes(trades, rv) {
   const closed = sortTradesChronologically((trades || []).filter(function(t){ return getTradeResult(t) !== "Open"; }));
   if (!closed.length) return null;
@@ -2099,48 +2327,119 @@ function DayTradeList({trades, rv, date, onUpdateInitialStop}) {
   );
 }
 
-// EQUITY CURVE
-function EquityCurve({trades, rv, showOnlyR}) {
-  const closed = sortTradesChronologically((trades || []).filter(function(t){return getTradeResult(t)!=="Open";}));
-  if (closed.length < 2) return null;
-  const pts = [0]; let cum = 0;
-  closed.forEach(function(t){ cum += calcR(t.pnl_dollars, rv); pts.push(cum); });
-  const mn=Math.min(...pts), mx=Math.max(...pts), rng=mx-mn||1;
-  const W=560,H=110,P=22,L=46,iW=W-L-P,iH=H-P*2;
-  const x = function(i){ return L+(i/(pts.length-1))*iW; };
-  const y = function(v){ return P+iH-((v-mn)/rng)*iH; };
-  const path = pts.map(function(v,i){ return (i===0?"M":"L")+x(i).toFixed(1)+","+y(v).toFixed(1); }).join(" ");
-  const fill = path+" L"+x(pts.length-1).toFixed(1)+","+(P+iH).toFixed(1)+" L"+L+","+(P+iH).toFixed(1)+" Z";
-  const last=pts[pts.length-1], lc=last>=0?C.green:C.red, showZ=mn<0&&mx>0;
-  let pk2=0,maxDD2=0;
-  pts.forEach(function(v){if(v>pk2)pk2=v;const dd=pk2-v;if(dd>maxDD2)maxDD2=dd;});
+// DRAWDOWN / EQUITY
+function PropLimitControl({enabled, limitR, onSave}) {
+  const [draft, setDraft] = useState(String(limitR));
+  const [feedback, setFeedback] = useState("");
+  useEffect(function(){ setDraft(String(limitR)); },[limitR]);
+  async function persist(nextEnabled, nextLimit){
+    setFeedback("");
+    if (!validPropLimitValue(nextLimit)) { setFeedback("Usa una soglia tra 0.25R e 100R."); return; }
+    if (typeof onSave !== "function") return;
+    try {
+      await onSave(!!nextEnabled,Number(nextLimit));
+      setFeedback("SALVATO");
+      setTimeout(function(){ setFeedback(""); },1200);
+    } catch(error) {
+      setFeedback(error && error.message ? error.message : "Salvataggio non riuscito.");
+    }
+  }
   return (
-    <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:"16px 20px",marginBottom:14}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:12}}>
-        <span style={{fontSize:12,color:C.text,letterSpacing:"0.11em",textTransform:"uppercase",fontWeight:700}}>Equity Curve</span>
-        <div style={{display:"flex",gap:24}}>
-          <div style={{textAlign:"right"}}>
-            <div style={{fontSize:9,color:C.sub,marginBottom:2}}>Total R</div>
-            <div style={{fontSize:16,fontWeight:700,color:lc}}>{fmtR(last)}</div>
-            {!showOnlyR && <div style={{fontSize:11,color:lc,opacity:0.65}}>{fmtD(last*rv)}</div>}
+    <div className="prop-limit-control">
+      <label className="prop-limit-switch" title="Attiva o disattiva la soglia di drawdown del conto prop">
+        <input type="checkbox" checked={!!enabled} onChange={function(e){persist(e.target.checked,validPropLimitValue(draft)?Number(draft):limitR);}}/>
+        <span>{enabled?"PROP LIMIT":"CONTO PERSONALE"}</span>
+      </label>
+      {enabled && (
+        <label style={{display:"inline-flex",alignItems:"center",gap:5,color:C.gold,fontSize:10,fontWeight:700,whiteSpace:"nowrap"}}>
+          <input className="prop-limit-input" type="number" min="0.25" max="100" step="0.25" value={draft}
+            onChange={function(e){setDraft(e.target.value);setFeedback("");}}
+            onBlur={function(){persist(true,draft);}}
+            onKeyDown={function(e){if(e.key==="Enter")e.currentTarget.blur();}}
+            aria-label="Limite drawdown prop in R"/>
+          <span>R</span>
+        </label>
+      )}
+      {feedback && <span role="status" style={{fontSize:9,color:feedback==="SALVATO"?C.green:C.red,maxWidth:180}}>{feedback}</span>}
+    </div>
+  );
+}
+
+function EquityCurve({trades, rv, showOnlyR, propLimitEnabled, propLimitR, onPropSettingsChange}) {
+  const [view, setView] = useState("drawdown");
+  const risk = calcRiskSeries(trades,rv);
+  if (!risk || risk.closedCount < 2) return null;
+  const W=800,H=190,T=20,R=22,B=28,L=52,iW=W-L-R,iH=H-T-B;
+  const equityValues=risk.points.map(function(point){return point.equity;});
+  const drawdownValues=risk.points.map(function(point){return -point.drawdown;});
+  const values=view==="drawdown"?drawdownValues:equityValues;
+  let mn=Math.min.apply(null,values),mx=Math.max.apply(null,values);
+  if(view==="drawdown"){
+    mx=0;
+    if(propLimitEnabled&&validPropLimitValue(propLimitR))mn=Math.min(mn,-Number(propLimitR));
+  }
+  if(Math.abs(mx-mn)<0.000000001){if(view==="drawdown")mn=-1;else{mn-=1;mx+=1;}}
+  const pad=view==="equity"?(mx-mn)*0.08:0;
+  const chartMin=mn-pad,chartMax=mx+pad,rng=chartMax-chartMin||1;
+  const x=function(index){return L+(index/(values.length-1))*iW;};
+  const y=function(value){return T+iH-((value-chartMin)/rng)*iH;};
+  const path=values.map(function(value,index){return(index===0?"M":"L")+x(index).toFixed(1)+","+y(value).toFixed(1);}).join(" ");
+  const baseline=view==="drawdown"?y(0):T+iH;
+  const fill=path+" L"+x(values.length-1).toFixed(1)+","+baseline.toFixed(1)+" L"+L+","+baseline.toFixed(1)+" Z";
+  const lineColor=view==="drawdown"?C.red:(risk.totalR>=0?C.green:C.red);
+  const maxPoint=risk.points[risk.maxDrawdownIndex];
+  const limitY=propLimitEnabled&&validPropLimitValue(propLimitR)?y(-Number(propLimitR)):null;
+  return (
+    <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:8,padding:"16px 20px",marginBottom:14}}>
+      <div className="risk-chart-header" style={{marginBottom:12}}>
+        <div>
+          <div style={{fontSize:13,color:C.text,letterSpacing:"0.11em",textTransform:"uppercase",fontWeight:700}}>{view==="drawdown"?"Drawdown Peaks":"Equity Curve"}</div>
+          <div style={{fontSize:9,color:C.sub,marginTop:5}}>{risk.closedCount+" trade chiusi in ordine cronologico"}</div>
+        </div>
+        <div className="risk-chart-controls">
+          <div className="risk-view-toggle" role="group" aria-label="Vista curva rischio">
+            <button type="button" aria-pressed={view==="drawdown"} onClick={function(){setView("drawdown");}}>DRAWDOWN</button>
+            <button type="button" aria-pressed={view==="equity"} onClick={function(){setView("equity");}}>EQUITY</button>
           </div>
-          <div style={{textAlign:"right"}}>
-            <div style={{fontSize:9,color:C.sub,marginBottom:2}}>Max DD</div>
-            <div style={{fontSize:16,fontWeight:700,color:C.red}}>{"-"+maxDD2.toFixed(2)+"R"}</div>
-            {!showOnlyR && <div style={{fontSize:11,color:C.red,opacity:0.65}}>{"$"+Math.round(maxDD2*rv).toLocaleString()}</div>}
-          </div>
+          <PropLimitControl enabled={!!propLimitEnabled} limitR={propLimitR==null?PROP_LIMIT_DEFAULT_R:propLimitR} onSave={onPropSettingsChange}/>
         </div>
       </div>
-      <svg viewBox={"0 0 "+W+" "+H} width="100%" style={{display:"block"}}>
-        <line x1={L} y1={P+iH*0.33} x2={W-P} y2={P+iH*0.33} stroke="#14141A" strokeWidth="1"/>
-        <line x1={L} y1={P+iH*0.67} x2={W-P} y2={P+iH*0.67} stroke="#14141A" strokeWidth="1"/>
-        {showZ && <line x1={L} y1={y(0)} x2={W-P} y2={y(0)} stroke="#2A2A34" strokeWidth="0.75" strokeDasharray="4,3"/>}
-        <path d={fill} fill={lc+"18"}/>
-        <path d={path} fill="none" stroke={lc} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round"/>
-        {pts.map(function(v,i){ return <circle key={i} cx={x(i)} cy={y(v)} r="2" fill={i===0?"#444":v>=(pts[Math.max(0,i-1)]||0)?C.green:C.red}/>; })}
-        <text x={L-4} y={P+4}    fill={C.sub} fontSize="8" textAnchor="end">{mx.toFixed(1)+"R"}</text>
-        <text x={L-4} y={P+iH+4} fill={C.sub} fontSize="8" textAnchor="end">{mn.toFixed(1)+"R"}</text>
+      <div style={{display:"flex",justifyContent:"flex-end",gap:24,marginBottom:6,flexWrap:"wrap"}}>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontSize:9,color:C.sub,marginBottom:2}}>{view==="drawdown"?"CURRENT DD":"TOTAL R"}</div>
+          <div style={{fontSize:16,fontWeight:700,color:view==="drawdown"?(risk.currentDrawdown>0?C.red:C.green):(risk.totalR>=0?C.green:C.red)}}>{view==="drawdown"?"-"+risk.currentDrawdown.toFixed(2)+"R":fmtR(risk.totalR)}</div>
+          {!showOnlyR&&<div style={{fontSize:10,color:C.sub,marginTop:2}}>{view==="drawdown"?fmtD(-risk.currentDrawdown*rv):fmtD(risk.totalR*rv)}</div>}
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontSize:9,color:C.sub,marginBottom:2}}>MAX DD</div>
+          <div style={{fontSize:16,fontWeight:700,color:C.red}}>{"-"+risk.maxDrawdown.toFixed(2)+"R"}</div>
+          {!showOnlyR&&<div style={{fontSize:10,color:C.red,opacity:0.7,marginTop:2}}>{fmtD(-risk.maxDrawdown*rv)}</div>}
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontSize:9,color:C.sub,marginBottom:2}}>MAX SOTTO PICCO</div>
+          <div style={{fontSize:16,fontWeight:700,color:C.gold}}>{risk.longestUnderwaterTrades+" trade"}</div>
+          <div style={{fontSize:9,color:C.sub,marginTop:2}}>{risk.maxDrawdownDate?formatExecutionDate(risk.maxDrawdownDate):"-"}</div>
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontSize:9,color:C.sub,marginBottom:2}}>{view==="drawdown"?"TOTAL R":"CURRENT DD"}</div>
+          <div style={{fontSize:16,fontWeight:700,color:view==="drawdown"?(risk.totalR>=0?C.green:C.red):(risk.currentDrawdown>0?C.red:C.green)}}>{view==="drawdown"?fmtR(risk.totalR):"-"+risk.currentDrawdown.toFixed(2)+"R"}</div>
+          {!showOnlyR&&<div style={{fontSize:10,color:C.sub,marginTop:2}}>{view==="drawdown"?fmtD(risk.totalR*rv):fmtD(-risk.currentDrawdown*rv)}</div>}
+        </div>
+      </div>
+      <svg viewBox={"0 0 "+W+" "+H} width="100%" role="img" aria-label={view==="drawdown"?"Curva dei drawdown dal massimo precedente":"Curva cumulativa dei risultati in R"} style={{display:"block"}}>
+        {[0.25,0.5,0.75].map(function(frac){const gy=T+iH*frac;return <line key={frac} x1={L} y1={gy} x2={W-R} y2={gy} stroke="#24242E" strokeWidth="1"/>;})}
+        {view==="equity"&&chartMin<0&&chartMax>0&&<line x1={L} y1={y(0)} x2={W-R} y2={y(0)} stroke={C.border2} strokeWidth="1" strokeDasharray="4,3"/>}
+        {view==="drawdown"&&limitY!=null&&<line x1={L} y1={limitY} x2={W-R} y2={limitY} stroke={C.gold} strokeWidth="1.2" strokeDasharray="6,4"/>}
+        {view==="drawdown"&&limitY!=null&&<text x={W-R-2} y={Math.max(T+9,limitY-4)} fill={C.gold} fontSize="8" textAnchor="end">{"PROP -"+Number(propLimitR).toFixed(2)+"R"}</text>}
+        <path d={fill} fill={lineColor+"18"}/>
+        <path d={path} fill="none" stroke={lineColor} strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round"/>
+        {view==="drawdown"&&maxPoint&&<circle cx={x(risk.maxDrawdownIndex)} cy={y(-risk.maxDrawdown)} r="4" fill={C.red} stroke={C.text} strokeWidth="1"/>}
+        <text x={L-6} y={T+4} fill={C.sub} fontSize="8" textAnchor="end">{chartMax.toFixed(1)+"R"}</text>
+        <text x={L-6} y={T+iH+4} fill={C.sub} fontSize="8" textAnchor="end">{chartMin.toFixed(1)+"R"}</text>
+        <text x={L} y={H-5} fill={C.sub} fontSize="8">0</text>
+        <text x={W-R} y={H-5} fill={C.sub} fontSize="8" textAnchor="end">{risk.closedCount+" trade"}</text>
       </svg>
+      {propLimitEnabled&&<div style={{fontSize:9,color:C.sub,marginTop:6}}>La linea prop e una soglia peak-to-trough configurabile, non replica eventuali regole trailing o daily loss della prop firm.</div>}
     </div>
   );
 }
@@ -2452,7 +2751,7 @@ function CalendarioView({trades, rv, onImport, onExport, onTWImport, ohlcMeta, s
 }
 
 // DASHBOARD
-function Dashboard({trades, rv, ohlcData, ohlcNQ, showOnlyR, onToggleR, onOpenInitialStops}) {
+function Dashboard({trades, rv, ohlcData, ohlcNQ, showOnlyR, onToggleR, onOpenInitialStops, propLimitEnabled, propLimitR, onPropSettingsChange}) {
   const m = calcStats(trades, rv);
   const extremes = calcPerformanceExtremes(trades, rv);
   const mmStats = calcMaeMfeStats(trades, ohlcData, ohlcNQ);
@@ -2512,7 +2811,7 @@ function Dashboard({trades, rv, ohlcData, ohlcNQ, showOnlyR, onToggleR, onOpenIn
         <MetricCard label="Best Trading Day" value={fmtR(extremes.bestDay.r)} sub={dayExtremeSub(extremes.bestDay)} color={extremes.bestDay.dollars>=0?C.green:C.red}/>
         <MetricCard label="Worst Trading Day" value={fmtR(extremes.worstDay.r)} sub={dayExtremeSub(extremes.worstDay)} color={extremes.worstDay.dollars<=0?C.red:C.green}/>
       </div>
-      <EquityCurve trades={trades} rv={rv} showOnlyR={showOnlyR}/>
+      <EquityCurve trades={trades} rv={rv} showOnlyR={showOnlyR} propLimitEnabled={propLimitEnabled} propLimitR={propLimitR} onPropSettingsChange={onPropSettingsChange}/>
       <div className="dashboard-pair" style={{gap:14,marginBottom:14}}>
         <DonutChart w={m.w} l={m.l} be={m.be}/>
         <AssetWinRateDonuts trades={trades}/>
@@ -2558,6 +2857,136 @@ function Dashboard({trades, rv, ohlcData, ohlcNQ, showOnlyR, onToggleR, onOpenIn
         {label:"Full Hold",m:byPart["Full Hold"]||null,col:C.sub},
         {label:"Partial",  m:byPart["Partial"]  ||null,col:C.purple},
       ]}/>
+    </div>
+  );
+}
+
+function MonteCarloFanChart({simulation}) {
+  if (!simulation || !simulation.bands || !simulation.bands.length) return null;
+  const bands = simulation.bands;
+  const W=820,H=270,T=22,R=24,B=34,L=56,iW=W-L-R,iH=H-T-B;
+  let minValue=0,maxValue=0;
+  bands.forEach(function(point){minValue=Math.min(minValue,point.p05);maxValue=Math.max(maxValue,point.p95);});
+  const baseRange=maxValue-minValue||1;
+  minValue-=baseRange*0.08;maxValue+=baseRange*0.08;
+  const range=maxValue-minValue||1;
+  const x=function(step){return L+(step/simulation.horizon)*iW;};
+  const y=function(value){return T+iH-((value-minValue)/range)*iH;};
+  function linePath(key){return bands.map(function(point,index){return(index===0?"M":"L")+x(point.step).toFixed(1)+","+y(point[key]).toFixed(1);}).join(" ");}
+  function areaPath(upper,lower){
+    const top=bands.map(function(point,index){return(index===0?"M":"L")+x(point.step).toFixed(1)+","+y(point[upper]).toFixed(1);}).join(" ");
+    const bottom=bands.slice().reverse().map(function(point){return"L"+x(point.step).toFixed(1)+","+y(point[lower]).toFixed(1);}).join(" ");
+    return top+" "+bottom+" Z";
+  }
+  return (
+    <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:8,padding:"16px 18px",minWidth:0}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:12,marginBottom:10,flexWrap:"wrap"}}>
+        <span style={{fontSize:12,color:C.text,fontWeight:700,letterSpacing:"0.11em"}}>OUTCOME FAN</span>
+        <span style={{fontSize:9,color:C.sub}}>P5-P95 / P25-P75 / MEDIANA</span>
+      </div>
+      <svg viewBox={"0 0 "+W+" "+H} width="100%" role="img" aria-label="Distribuzione Monte Carlo degli outcome cumulativi in R" style={{display:"block"}}>
+        {[0.25,0.5,0.75].map(function(frac){const gy=T+iH*frac;return <line key={frac} x1={L} y1={gy} x2={W-R} y2={gy} stroke="#24242E" strokeWidth="1"/>;})}
+        {minValue<0&&maxValue>0&&<line x1={L} y1={y(0)} x2={W-R} y2={y(0)} stroke={C.border2} strokeWidth="1" strokeDasharray="5,4"/>}
+        <path d={areaPath("p95","p05")} fill={C.blue+"1F"}/>
+        <path d={areaPath("p75","p25")} fill={C.gold+"28"}/>
+        <path d={linePath("p50")} fill="none" stroke={C.text} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
+        <path d={linePath("p05")} fill="none" stroke={C.blue+"90"} strokeWidth="1"/>
+        <path d={linePath("p95")} fill="none" stroke={C.blue+"90"} strokeWidth="1"/>
+        <text x={L-6} y={T+4} fill={C.sub} fontSize="8" textAnchor="end">{maxValue.toFixed(1)+"R"}</text>
+        <text x={L-6} y={T+iH+4} fill={C.sub} fontSize="8" textAnchor="end">{minValue.toFixed(1)+"R"}</text>
+        <text x={L} y={H-7} fill={C.sub} fontSize="8">0</text>
+        <text x={W-R} y={H-7} fill={C.sub} fontSize="8" textAnchor="end">{simulation.horizon+" giorni"}</text>
+      </svg>
+    </div>
+  );
+}
+
+function MonteCarloDrawdownHistogram({simulation, propLimitEnabled, propLimitR}) {
+  const bins=buildHistogram(simulation?simulation.maxDrawdowns:[],7);
+  const maxPct=Math.max.apply(null,bins.map(function(bin){return bin.pct;}))||1;
+  return (
+    <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:8,padding:"16px 18px",minWidth:0}}>
+      <div style={{fontSize:12,color:C.text,fontWeight:700,letterSpacing:"0.11em",marginBottom:14}}>MAX DRAWDOWN DISTRIBUTION</div>
+      {bins.map(function(bin,index){
+        const beyond=propLimitEnabled&&validPropLimitValue(propLimitR)&&bin.max>=Number(propLimitR);
+        const color=beyond?C.red:C.blue;
+        return (
+          <div key={index} style={{marginBottom:11}}>
+            <div style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:9,marginBottom:4}}>
+              <span style={{color:C.sub}}>{bin.min.toFixed(1)+" - "+bin.max.toFixed(1)+"R"}</span>
+              <span style={{color:color,fontWeight:700}}>{fmtProbability(bin.pct)}</span>
+            </div>
+            <div style={{height:7,background:C.muted,borderRadius:3,overflow:"hidden"}}>
+              <div style={{height:"100%",width:(bin.pct/maxPct*100).toFixed(1)+"%",background:color,borderRadius:3}}/>
+            </div>
+          </div>
+        );
+      })}
+      <div style={{fontSize:9,color:C.sub,lineHeight:1.5,marginTop:8}}>Picco-perdita misurato dal massimo precedente di ogni percorso.</div>
+    </div>
+  );
+}
+
+function MonteCarloView({trades, rv, showOnlyR, onToggleR, propLimitEnabled, propLimitR, onPropSettingsChange}) {
+  const sample=useMemo(function(){return buildMonteCarloSample(trades,rv);},[trades,rv]);
+  const [horizonMode,setHorizonMode]=useState("sample");
+  const [seed,setSeed]=useState(MONTE_CARLO_DEFAULT_SEED);
+  const horizon=horizonMode==="sample"?Math.max(1,sample.dayCount):Number(horizonMode);
+  const simulation=useMemo(function(){
+    return runMonteCarlo(sample.blocks,horizon,MONTE_CARLO_SIMULATIONS,seed,propLimitEnabled?propLimitR:null);
+  },[sample,horizon,seed,propLimitEnabled,propLimitR]);
+  if (!sample.dayCount || !simulation) return <div style={{textAlign:"center",padding:"60px 20px",color:C.sub,fontSize:13}}>Servono trade chiusi per eseguire la simulazione.</div>;
+  const horizonOptions=[{key:"20",label:"20 G"},{key:"50",label:"50 G"},{key:"100",label:"100 G"},{key:"sample",label:"CAMPIONE "+sample.dayCount}];
+  const metricSub=function(value,label){
+    const parts=[];
+    if(!showOnlyR&&value!=null)parts.push(fmtD(value*rv));
+    if(label)parts.push(label);
+    return parts.join(" - ")||null;
+  };
+  return (
+    <div>
+      <div className="monte-carlo-toolbar">
+        <div>
+          <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:30,fontWeight:700,color:C.text,letterSpacing:"0.04em"}}>MONTE CARLO</div>
+          <div style={{fontSize:10,color:C.blue,letterSpacing:"0.12em",fontWeight:700,marginTop:3}}>{MONTE_CARLO_SIMULATIONS.toLocaleString("it-IT")+" PERCORSI - BOOTSTRAP PER GIORNATA"}</div>
+        </div>
+        <div className="monte-carlo-toolbar-group">
+          <button onClick={onToggleR} style={{padding:"6px 12px",background:showOnlyR?C.gold+"20":"transparent",border:"1px solid "+(showOnlyR?C.gold:C.border),borderRadius:20,color:showOnlyR?C.gold:C.sub,fontSize:11,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.1em",fontWeight:showOnlyR?700:400}}>{showOnlyR?"R":"R / $"}</button>
+          <PropLimitControl enabled={!!propLimitEnabled} limitR={propLimitR} onSave={onPropSettingsChange}/>
+        </div>
+      </div>
+      <div style={{background:C.panel,border:"1px solid "+C.border,borderRadius:8,padding:"14px 16px",marginBottom:14}}>
+        <div className="monte-carlo-toolbar" style={{marginBottom:0}}>
+          <div className="monte-carlo-toolbar-group">
+            <span style={{fontSize:9,color:C.sub,fontWeight:700,letterSpacing:"0.1em"}}>ORIZZONTE</span>
+            <div className="risk-view-toggle" role="group" aria-label="Orizzonte Monte Carlo">
+              {horizonOptions.map(function(option){return <button key={option.key} type="button" aria-pressed={horizonMode===option.key} onClick={function(){setHorizonMode(option.key);}}>{option.label}</button>;})}
+            </div>
+          </div>
+          <button type="button" onClick={function(){setSeed((Date.now()^Math.floor(Math.random()*4294967295))>>>0);}} style={{padding:"8px 13px",background:"transparent",border:"1px solid "+C.blue+"80",borderRadius:4,color:C.blue,fontSize:10,fontFamily:"inherit",fontWeight:700,letterSpacing:"0.08em",cursor:"pointer"}}>NUOVA SIMULAZIONE</button>
+        </div>
+      </div>
+      <div className="dashboard-metrics" style={{gap:10,marginBottom:10}}>
+        <MetricCard label="Median Outcome" value={fmtR(simulation.finalMedian)} sub={metricSub(simulation.finalMedian,"P50")} color={simulation.finalMedian>=0?C.green:C.red}/>
+        <MetricCard label="P5 Outcome" value={fmtR(simulation.finalP05)} sub={metricSub(simulation.finalP05,"scenario debole")} color={simulation.finalP05>=0?C.green:C.red}/>
+        <MetricCard label="Positive Paths" value={fmtProbability(simulation.positiveProbability)} sub={simulation.simulationCount.toLocaleString("it-IT")+" percorsi"} color={simulation.positiveProbability>=0.5?C.green:C.red}/>
+        <MetricCard label={propLimitEnabled?"Beyond Prop Limit":"Account Mode"} value={propLimitEnabled?fmtProbability(simulation.propBreachProbability):"PERSONALE"} sub={propLimitEnabled?"DD >= "+Number(propLimitR).toFixed(2)+"R":"nessuna soglia prop"} color={propLimitEnabled?(simulation.propBreachProbability<=0.1?C.green:C.red):C.blue}/>
+      </div>
+      <div className="dashboard-metrics" style={{gap:10,marginBottom:14}}>
+        <MetricCard label="Median Max DD" value={"-"+simulation.maxDrawdownMedian.toFixed(2)+"R"} sub={metricSub(-simulation.maxDrawdownMedian,"P50")} color={C.gold}/>
+        <MetricCard label="P95 Max DD" value={"-"+simulation.maxDrawdownP95.toFixed(2)+"R"} sub={metricSub(-simulation.maxDrawdownP95,"coda 95%")} color={C.red}/>
+        <MetricCard label="Red-Day Streak" value={Math.round(simulation.maxLossStreakMedian)+" giorni"} sub={"P95 "+Math.round(simulation.maxLossStreakP95)+" giorni"} color={C.red}/>
+        <MetricCard label="Underwater Time" value={Math.round(simulation.maxUnderwaterMedian)+" giorni"} sub={"P95 "+Math.round(simulation.maxUnderwaterP95)+" giorni"} color={C.blue}/>
+      </div>
+      <div className="monte-carlo-grid" style={{marginBottom:14}}>
+        <MonteCarloFanChart simulation={simulation}/>
+        <MonteCarloDrawdownHistogram simulation={simulation} propLimitEnabled={propLimitEnabled} propLimitR={propLimitR}/>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:14,alignItems:"start"}}>
+        <div className="monte-carlo-note">{"CAMPIONE: "+sample.tradeCount+" trade chiusi, "+sample.dayCount+" giornate, 1R = $"+Number(rv).toLocaleString("en-US")+". Le uscite parziali restano nella loro giornata; i BE mantengono il P&L economico reale."}</div>
+        <div className="monte-carlo-note">Ogni giornata storica viene estratta con rimpiazzo. La simulazione descrive la variabilita del campione registrato: non e una previsione dei risultati futuri.</div>
+        <div className="monte-carlo-note">{sample.duplicateIds||sample.invalidRows?"AUDIT: esclusi "+sample.duplicateIds+" ID duplicati e "+sample.invalidRows+" record non validi.":"AUDIT: nessun ID duplicato o record non valido escluso dalla simulazione."}</div>
+      </div>
     </div>
   );
 }
@@ -3955,6 +4384,8 @@ function Journal() {
   const [ohlcNQ,       setOhlcNQ]       = useState([]);
   const [ohlcMetaNQ,   setOhlcMetaNQ]   = useState(null);
   const [showOnlyR,    setShowOnlyR]    = useState(false);
+  const [propLimitEnabled, setPropLimitEnabled] = useState(true);
+  const [propLimitR, setPropLimitR] = useState(PROP_LIMIT_DEFAULT_R);
   const [loading,      setLoading]      = useState(true);
   const [showImport,   setShowImport]   = useState(false);
   const [showExport,   setShowExport]   = useState(false);
@@ -4000,6 +4431,11 @@ function Journal() {
           if (validRValue(settings.rv)) setRv(Number(settings.rv));
           else setLoadWarning("Valore R salvato non valido: uso temporaneo di $" + R_DEFAULT + ". Correggilo nelle Impostazioni.");
         }
+        if (settings && typeof settings.propLimitEnabled === "boolean") setPropLimitEnabled(settings.propLimitEnabled);
+        if (settings && settings.propDrawdownLimitR != null) {
+          if (validPropLimitValue(settings.propDrawdownLimitR)) setPropLimitR(Number(settings.propDrawdownLimitR));
+          else setLoadWarning(function(previous){return(previous?previous+" ":"")+"Limite prop salvato non valido: uso temporaneo di "+PROP_LIMIT_DEFAULT_R+"R.";});
+        }
         if (cleanedTrades.changed) {
           try { await storage.set("jnl:v2:trades",JSON.stringify(cleanedTrades.trades)); }
           catch(e) { setLoadWarning(e.message); }
@@ -4016,6 +4452,16 @@ function Journal() {
     setRv(newR);
     setLoadWarning("");
     setShowSettings(false);
+  }
+  async function savePropSettings(enabled, limitR){
+    if (!validPropLimitValue(limitR)) throw new Error("Il limite prop deve essere compreso tra 0.25R e 100R.");
+    const stored = await storage.get("jnl:v2:settings");
+    const settings = stored ? JSON.parse(stored.value) : {};
+    if (!settings || typeof settings !== "object" || Array.isArray(settings)) throw new Error("Impostazioni salvate non valide.");
+    const nextSettings = {...settings,propLimitEnabled:!!enabled,propDrawdownLimitR:Number(limitR)};
+    await storage.set("jnl:v2:settings",JSON.stringify(nextSettings));
+    setPropLimitEnabled(!!enabled);
+    setPropLimitR(Number(limitR));
   }
   async function saveTWOhlc(data, meta){
     if (!Array.isArray(data) || data.length < 2) throw new Error("CSV NON RICONOSCIUTO - servono almeno due candele OHLC valide.");
@@ -4066,7 +4512,7 @@ function Journal() {
     setTab("calendario");
   }
   function toggleR(){ setShowOnlyR(function(v){return !v;}); }
-  const TABS = [{k:"dashboard",l:"DASHBOARD"},{k:"calendario",l:"CALENDARIO"},{k:"settimanale",l:"SETTIMANALE"},{k:"playbook",l:"PLAYBOOK"},{k:"execution",l:"EXECUTION"},{k:"mindset",l:"CHAMPION MINDSET"},{k:"pattern",l:"PATTERN INTERRUPT"}];
+  const TABS = [{k:"dashboard",l:"DASHBOARD"},{k:"montecarlo",l:"MONTE CARLO"},{k:"calendario",l:"CALENDARIO"},{k:"settimanale",l:"SETTIMANALE"},{k:"playbook",l:"PLAYBOOK"},{k:"execution",l:"EXECUTION"},{k:"mindset",l:"CHAMPION MINDSET"},{k:"pattern",l:"PATTERN INTERRUPT"}];
   if (loading) return (
     <>
       <TradingGuardStopButton onOpen={function(){setShowTradingGuard(true);}}/>
@@ -4121,7 +4567,8 @@ function Journal() {
           );
         })}
       </div>
-      {tab==="dashboard"   && <Dashboard      trades={trades} rv={rv} ohlcData={ohlcData} ohlcNQ={ohlcNQ} showOnlyR={showOnlyR} onToggleR={toggleR} onOpenInitialStops={openInitialStops}/>}
+      {tab==="dashboard"   && <Dashboard      trades={trades} rv={rv} ohlcData={ohlcData} ohlcNQ={ohlcNQ} showOnlyR={showOnlyR} onToggleR={toggleR} onOpenInitialStops={openInitialStops} propLimitEnabled={propLimitEnabled} propLimitR={propLimitR} onPropSettingsChange={savePropSettings}/>}
+      {tab==="montecarlo"  && <MonteCarloView trades={trades} rv={rv} showOnlyR={showOnlyR} onToggleR={toggleR} propLimitEnabled={propLimitEnabled} propLimitR={propLimitR} onPropSettingsChange={savePropSettings}/>}
       {tab==="calendario"  && <CalendarioView  trades={trades} rv={rv} onImport={function(){setShowImport(true);}} onExport={function(){setShowExport(true);}} onTWImport={function(){setShowTWImport(true);}} ohlcMeta={ohlcMeta} showOnlyR={showOnlyR} onToggleR={toggleR} onUpdateInitialStop={updateInitialStop} initialStopDate={initialStopDate}/>}
       {tab==="settimanale" && <SettimanaleView/>}
       {tab==="playbook"    && <WeeklyPlaybookView/>}

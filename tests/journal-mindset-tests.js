@@ -42,13 +42,13 @@ async function main() {
     const e=environment(),view=e.mount("ChampionMindsetView");await view.flush();
     const expected=[
       "VICTORY BELONGS TO THE MOST TENACIOUS.","PRESSURE IS A PRIVILEGE.",
-      "CHAMPIONS ARE DEFINED BY HOW THEY RECOVER.","REST AT THE END, NOT IN THE MIDDLE.","FIRST, YOU HAVE TO FINISH.",
+      "CHAMPIONS ARE DEFINED BY HOW THEY RECOVER.","REST AT THE END, NOT IN THE MIDDLE.","THERE IS ALWAYS SOMETHING TO LEARN.",
       "NO MATTER WHAT HAPPENS, WE ARE BULLISH ON LIFE.",
       "A QUITTER NEVER WINS, AND A WINNER NEVER QUITS."
     ];
     assert.deepEqual(nodes(view.tree).filter(n=>n.props.className==="mindset-quote-text").map(text),expected);
     assert.deepEqual(nodes(view.tree).filter(n=>n.props.className==="mindset-author").map(text),[
-      "\u2014 Roland-Garros","\u2014 Billie Jean King","\u2014 Serena Williams","\u2014 Kobe Bryant","\u2014 Michael Schumacher","\u2014 Noemi","\u2014 Napoleon Hill"
+      "\u2014 Roland-Garros","\u2014 Billie Jean King","\u2014 Serena Williams","\u2014 Kobe Bryant","\u2014 Noemi","\u2014 Noemi","\u2014 Napoleon Hill"
     ]);
     assert.equal(radios(view).length,7);assert.deepEqual(selected(view),[]);
     const layout=find(view,n=>n.props.className==="mindset-layout");

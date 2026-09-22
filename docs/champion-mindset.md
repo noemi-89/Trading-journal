@@ -25,7 +25,8 @@ The existing storage helper saves a JSON object under
 {"2026-09-03":"pressure","2026-09-02":"rest"}
 ```
 
-Valid IDs are `tenacity`, `pressure`, `recovery`, `rest`, `finish`, and
+Valid IDs are `tenacity`, `pressure`, `recovery`, `rest`,
+`finish` ("THERE IS ALWAYS SOMETHING TO LEARN.", Noemi), and
 `bullish_life` ("NO MATTER WHAT HAPPENS, WE ARE BULLISH ON LIFE.", Noemi),
 and `winner_never_quits` ("A QUITTER NEVER WINS, AND A WINNER NEVER QUITS.",
 Napoleon Hill).
